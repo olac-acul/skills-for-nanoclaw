@@ -267,6 +267,13 @@ describe('request protections', () => {
     expect((await fetch(base + '/missing')).status).toBe(404);
   });
 
+  it('hides elements marked hidden even when a rule sets their display, and skips the warning on localhost', async () => {
+    const css = await (await fetch(base + '/app.css')).text();
+    expect(css).toMatch(/\[hidden\]\s*\{\s*display:\s*none\s*!important/);
+    const script = await (await fetch(base + '/app.js')).text();
+    expect(script).toContain('location.hostname');
+  });
+
   it('serves the UI script without ever writing untrusted values as HTML', async () => {
     const script = await (await fetch(base + '/app.js')).text();
     expect(script).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(/);

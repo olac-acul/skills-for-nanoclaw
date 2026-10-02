@@ -88,7 +88,7 @@ Restart the NanoClaw service so the host loads the module.
 
 ## First run
 
-1. Restart the service. The log says where the panel listens and, until an administrator exists, how to create one.
+1. Restart the service. The log says where the panel listens and, until an administrator exists, how to create one. If the host refuses to start with an "upgrade tripwire" message, the tree changed outside the setup flow (installing a skill does that); once the build and tests above passed, record it with `pnpm exec tsx scripts/upgrade-state.ts set` and start again (see `docs/upgrade-recovery.md`).
 2. Create the administrator with a one-time code:
 
    ```bash

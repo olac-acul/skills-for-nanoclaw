@@ -65,6 +65,8 @@ payload/src/modules/manager-backup/upstream-host.test.ts -> src/modules/manager-
 payload/src/modules/manager-backup/upstream-host.ts -> src/modules/manager-backup/upstream-host.ts
 ```
 
+If the host later refuses to start with an "upgrade tripwire" message, installing a skill changed the tree outside the setup flow; after the build and tests below pass, record it with `pnpm exec tsx scripts/upgrade-state.ts set` (see `docs/upgrade-recovery.md`).
+
 Build, typecheck the script, and run the module's tests. The tests include one
 that migrates a real database and restores a backup into it, so they fail if a
 NanoClaw release changes something this library depends on.

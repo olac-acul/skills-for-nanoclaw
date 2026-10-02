@@ -52,6 +52,7 @@ export const APP_CSS = `
   --accent: #4c9aff; --accent-text: #08111c; --danger: #ff8a80; --ok: #56d364; --warn-bg: #3a2f08; --warn-text: #f5deb3;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
 header { display: flex; gap: 16px; align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 nav { display: flex; gap: 4px; flex: 1; flex-wrap: wrap; }
@@ -59,6 +60,7 @@ nav button { background: none; border: 0; padding: 6px 10px; border-radius: 6px;
 nav button[aria-current="page"] { background: var(--bg); color: var(--text); font-weight: 600; }
 main { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
 h1 { font-size: 20px; margin: 0 0 16px; } h2 { font-size: 16px; margin: 24px 0 8px; }
+.card > h2:first-child { margin-top: 0; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
 .stat b { display: block; font-size: 22px; } .muted { color: var(--muted); }
@@ -339,7 +341,9 @@ function renderNav() {
 }
 function enter() {
   document.getElementById('top').hidden = false;
-  var banner = document.getElementById('banner'); banner.hidden = !state.insecure; banner.textContent = state.insecure ? T.insecure : '';
+  var local = ['localhost', '127.0.0.1', '[::1]'].indexOf(location.hostname) >= 0;
+  var warn = state.insecure && !local;
+  var banner = document.getElementById('banner'); banner.hidden = !warn; banner.textContent = warn ? T.insecure : '';
   go(state.view);
 }
 function start() {
