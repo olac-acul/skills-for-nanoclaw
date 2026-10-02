@@ -33,3 +33,22 @@ per strategy:
 Conclusion: never copy session DB files with a plain file copy while a
 container may be writing. Use the SQLite-aware copy. Attachment and outbox
 files are ordinary files and still need the agents drained (planned behaviour).
+
+## Spike 2: running approval-gated `ncl` commands from a host module
+
+`groups config update` is declared `access: 'approval'`. In `dispatch()`
+(`src/cli/dispatch.ts`) an approval hold is only ever created for **agent**
+callers; for `{ caller: 'host' }` the guard allows the command directly.
+
+Verified in-process against a fresh migrated DB:
+
+```ts
+await dispatch({ id, command: 'groups-config-update', args: { id: 'g1', provider: 'opencode', model: 'openai/x' } }, { caller: 'host' });
+// -> ok: true, container_configs row updated
+```
+
+The same command with `{ caller: 'agent', ... }` goes down the approval path
+instead. Conclusion: a host module (panel, CLI) can reuse the exact `ncl`
+validation and persistence by calling `dispatch` as the host. No approval
+prompt, no direct SQL against `container_configs`. `restartAgentGroupContainers`
+is exported for the restart step.
