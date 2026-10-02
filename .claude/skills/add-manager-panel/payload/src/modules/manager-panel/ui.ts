@@ -80,6 +80,17 @@ button.link { border: 0; background: none; color: var(--muted); }
 #banner { background: var(--warn-bg); color: var(--warn-text); padding: 8px 16px; text-align: center; }
 dialog { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); max-width: 520px; width: calc(100% - 32px); }
 dialog::backdrop { background: rgba(0,0,0,.45); }
+/* sign-in and first-run screens */
+.auth { min-height: calc(100vh - 96px); display: grid; place-items: center; }
+.auth-card { width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 32px 28px; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 12px 32px rgba(0,0,0,.12); }
+.auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; font-weight: 600; letter-spacing: .2px; }
+.auth-mark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); color: var(--accent-text); display: grid; place-items: center; font-weight: 700; }
+.auth-card h1 { font-size: 20px; margin: 0 0 4px; }
+.auth-card .sub { color: var(--muted); margin: 0 0 22px; }
+.auth-card form { max-width: none; gap: 14px; }
+.auth-card input { width: 100%; padding: 10px 12px; }
+.auth-card button.primary { width: 100%; padding: 10px 14px; margin-top: 4px; }
+.auth-card .hint { font-size: 13px; color: var(--muted); }
 code, .key { font-family: ui-monospace, monospace; word-break: break-all; }
 .key { display: block; padding: 10px; background: var(--bg); border: 1px dashed var(--line); border-radius: 6px; margin: 8px 0; user-select: all; }
 `;
@@ -90,8 +101,8 @@ var T = {
   nav: { overview: 'Overview', agents: 'Agents', model: 'Model', backups: 'Backups' },
   logout: 'Sign out',
   insecure: 'This connection is not encrypted: your password and backup keys cross the network in clear text. Use HTTPS (see the setup notes) unless you are on localhost.',
-  setup: { title: 'Create the administrator password', code: 'Setup code (shown in the terminal)', password: 'Password (at least 12 characters)', submit: 'Create account', hint: 'Run: pnpm exec tsx scripts/manager-panel.ts setup-code' },
-  login: { title: 'Sign in', password: 'Password', submit: 'Sign in' },
+  setup: { title: 'Welcome', sub: 'Create the administrator account for this install.', code: 'Setup code', password: 'Password (at least 12 characters)', submit: 'Create account', hint: 'Get the code by running pnpm exec tsx scripts/manager-panel.ts setup-code on this machine.' },
+  login: { title: 'Sign in', sub: 'Manage your NanoClaw install.', password: 'Password', submit: 'Sign in' },
   reauth: { title: 'Confirm your password', body: 'This action needs your password again.', submit: 'Confirm' },
   cancel: 'Cancel', close: 'Close', loading: 'Loading…', none: 'Nothing here yet.',
   overview: { title: 'Overview', release: 'Release', agents: 'Agents', running: 'Running now', sessions: 'Sessions', gateway: 'Credential gateway', channels: 'Channels', providers: 'Providers', backups: 'Backups', latest: 'Latest', never: 'never', up: 'Uptime' },
@@ -203,11 +214,13 @@ function viewAuth(needSetup) {
     ev.preventDefault(); clear(out);
     var p = needSetup ? api('POST', '/setup', { code: code.value, password: password.value }) : api('POST', '/session', { password: password.value });
     p.then(function (s) { state.csrf = s.csrf_token; state.insecure = s.insecure_http; enter(); }).catch(function (err) { out.appendChild(message('error', explain(err))); });
-  } }, h('h1', {}, needSetup ? T.setup.title : T.login.title),
-    needSetup && h('label', {}, T.setup.code, code), needSetup && h('p', { class: 'muted' }, T.setup.hint),
+  } }, needSetup && h('label', {}, T.setup.code, code), needSetup && h('p', { class: 'hint' }, T.setup.hint),
     h('label', {}, needSetup ? T.setup.password : T.login.password, password), out,
-    h('div', {}, h('button', { class: 'primary', type: 'submit' }, needSetup ? T.setup.submit : T.login.submit)));
-  show(h('div', { class: 'card' }, form));
+    h('button', { class: 'primary', type: 'submit' }, needSetup ? T.setup.submit : T.login.submit));
+  show(h('div', { class: 'auth' }, h('div', { class: 'auth-card' },
+    h('div', { class: 'auth-brand' }, h('span', { class: 'auth-mark', 'aria-hidden': 'true' }, 'N'), 'NanoClaw Manager'),
+    h('h1', {}, needSetup ? T.setup.title : T.login.title), h('p', { class: 'sub' }, needSetup ? T.setup.sub : T.login.sub), form)));
+  (needSetup ? code : password).focus();
 }
 
 function viewOverview() {
