@@ -1,0 +1,4 @@
+#!/bin/sh
+# Blocks commits that publish private addresses, personal emails, secrets,
+# or use a non-anonymous git identity. See scripts/privacy-scan.mjs.
+exec node "$(git rev-parse --show-toplevel)/scripts/privacy-scan.mjs" --identity --staged
