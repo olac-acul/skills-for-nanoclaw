@@ -76,3 +76,37 @@ stored in the headers and applied explicitly on restore.
 To verify when it is written: symlink write-through attack (symlink `a` then a
 file `a/x`), hardlink fidelity, dangling absolute symlinks (container skill
 links), numeric owners, multi-GB streaming memory use.
+
+## Spike 4: pausing agents during a hot backup
+
+Upstream's only way to stop new containers from starting is
+`stopGatewaySessionsForUnavailability()`, which closes admission **and kills
+every running container** (`killContainer(..., 'gateway-unavailable')`), and the
+gateway availability monitor can reopen admission on its own. There is no
+"drain" or "pause" API, and scheduled tasks and sweep wakes bypass the inbound
+message interceptor.
+
+Decision: a hot backup does not close admission. It waits (up to a configurable
+timeout) until `getActiveContainerCount()` is zero, then snapshots. Every
+database file is copied with SQLite's own copy, so each file is consistent on
+its own; what a running agent can still skew is the relative timing of
+different files. The result is recorded in the manifest:
+
+| `consistency` | Meaning |
+| --- | --- |
+| `cold` | the host was stopped |
+| `quiescent` | no agent container was running when the snapshot started or ended |
+| `best-effort` | agents were active; each file is consistent, files are not simultaneous |
+
+If agents are still running when the wait ends, the backup is refused unless the
+caller forces a best-effort one. The terminal CLI records `cold` when the host
+socket is not accepting connections.
+
+## Spike 5: applying a skill with upstream's engine
+
+`scripts/compose.mjs` clones upstream, installs it, applies each skill with
+upstream's `applySkill` (the same engine `/setup` uses), lints its directives
+and runs the build and test steps it declares. `add-manager-backup` applies with
+5 steps, no agent bounces, and 71 passing tests against upstream `main` at
+`d249c0fb`. Lessons: a `capture:` only works on `effect:refresh`; a precondition
+gate should be `effect:check` (exit code, no capture).

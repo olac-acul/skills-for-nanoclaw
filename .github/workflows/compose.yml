@@ -1,0 +1,24 @@
+name: compose
+# Applies every skill to a clean checkout of upstream NanoClaw with upstream's
+# own skill engine and runs the build and tests. The nightly run is what tells
+# us when a new upstream commit breaks an integration point.
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Upstream ref to test against
+        default: main
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      - run: node scripts/compose.mjs --ref "${{ github.event.inputs.ref || 'main' }}"

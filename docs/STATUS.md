@@ -33,10 +33,19 @@ Docker Compose stack of our own and no channels preconfigured:
 
 - [x] Spike 2: host-caller `dispatch` runs approval-gated `ncl` commands directly.
 - [x] Spike 3: `node-tar` hangs with default concurrency on Node 26; own minimal tar chosen.
+- [x] Spike 4: upstream has no non-killing admission pause; hot backups wait for idle and record `consistency`.
+- [x] `add-manager-backup` skill: tar, authenticated encryption, bundle create/verify,
+      transactional restore with rollback and rehearsal, retention, terminal CLI.
+      71 tests; applies cleanly to upstream `main` with upstream's own engine
+      (`node scripts/compose.mjs`); CLI exercised end to end on a scratch install.
 
 ## Next
 
-- [ ] Own minimal tar writer/reader (replaces the tar-library question, see spikes).
-- [ ] Spike 4: inbound hold + admission close during a snapshot.
-- [ ] Spikes needing Docker (OneCLI install, bind address, HTTP model endpoint).
-- [ ] First skill: `add-manager-backup` (CLI first, then panel integration).
+- [ ] Spikes needing Docker (OneCLI install, bind address, HTTP model endpoint,
+      real container drain). Needs a clean Docker host; the existing test LXC runs
+      another stack on the ports OneCLI needs.
+- [ ] `add-manager-panel`: server, auth, sessions, UI, then model settings, agents,
+      backups (using `BackupService` in-process).
+- [ ] Gateway state: decide per the "re-enter credentials" decision; document the
+      reinstall checklist printed after a restore.
+- [ ] Restore on a different machine from a real install (needs Docker host).
