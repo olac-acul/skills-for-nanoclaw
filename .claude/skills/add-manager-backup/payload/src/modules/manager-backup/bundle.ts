@@ -74,6 +74,12 @@ export interface BundleManifest {
   contents: { entries: number; files: number; bytes: number };
   /** Paths (relative to their roots) of channel or machine credentials that are in the bundle. */
   identities: { machineIdentityIncluded: boolean };
+  /**
+   * How coherent the snapshot is across files: `cold` (host stopped), `quiescent` (no agent
+   * container ran during the snapshot) or `best-effort` (agents were active; every database
+   * file is still individually consistent).
+   */
+  consistency: 'cold' | 'quiescent' | 'best-effort';
   /** Human-readable list of what was deliberately left out. */
   excluded: string[];
 }
@@ -85,6 +91,7 @@ export interface CreateBundleOptions {
   destFile: string;
   id?: string;
   includeMachineIdentity?: boolean;
+  consistency?: BundleManifest['consistency'];
   gzipLevel?: number;
   onProgress?: (progress: { phase: 'snapshot' | 'pack'; entries: number; bytes: number }) => void;
 }
@@ -291,6 +298,7 @@ export async function createBundle(options: CreateBundleOptions): Promise<Bundle
         bytes: files.reduce((sum, item) => sum + item.meta.size, 0),
       },
       identities: { machineIdentityIncluded },
+      consistency: options.consistency ?? 'best-effort',
       excluded: EXCLUDED_DESCRIPTION,
     };
     const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
@@ -402,6 +410,10 @@ export function parseManifest(raw: unknown): BundleManifest {
     'contents',
   );
   need(isRecord(raw.identities), 'identities');
+  need(
+    raw.consistency === 'cold' || raw.consistency === 'quiescent' || raw.consistency === 'best-effort',
+    'consistency',
+  );
   return raw as unknown as BundleManifest;
 }
 
