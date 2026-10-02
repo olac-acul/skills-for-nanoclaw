@@ -84,6 +84,8 @@ export interface RestoreResult {
   mode: RestoreMode;
   /** Groups whose derived image must be rebuilt (`ncl groups restart --rebuild`). */
   rebuildGroups: string[];
+  /** `.env` keys kept from this machine instead of the backup (names only). */
+  keptEnvKeys: string[];
   /** `.env` keys dropped by rehearsal mode (names only). */
   droppedEnvKeys: string[];
   /** The previous `.env`, upgrade marker and state were kept for rollback. */
@@ -196,6 +198,43 @@ export function filterEnvForRehearsal(text: string): { kept: string; dropped: st
     else dropped.push(name);
   }
   return { kept: kept.join('\n').replace(/\n{3,}$/, '\n'), dropped };
+}
+
+/**
+ * Settings that describe this machine's infrastructure rather than the install's data: where its
+ * credential gateway is, which gateway is installed, the panel's own address, proxy exclusions.
+ * A backup from another machine must not overwrite them, or the restored install would look for a
+ * gateway that is not there.
+ */
+const TARGET_OWNED_ENV = [/^ONECLI_/, /^NANOCLAW_GATEWAY_PROVIDER$/, /^PANEL_/, /^no_proxy$/i];
+
+function envKey(line: string): string | null {
+  const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
+  return match ? match[1] : null;
+}
+
+export function mergeTargetOwnedEnv(
+  bundleText: string | null,
+  targetText: string | null,
+): { text: string | null; kept: string[] } {
+  const owned = (key: string): boolean => TARGET_OWNED_ENV.some((pattern) => pattern.test(key));
+  const targetLines = (targetText ?? '').split('\n').filter((line) => {
+    const key = envKey(line);
+    return key !== null && owned(key);
+  });
+  if (bundleText === null && targetLines.length === 0) return { text: null, kept: [] };
+  const bundleLines = (bundleText ?? '')
+    .replace(/\n$/, '')
+    .split('\n')
+    .filter((line) => {
+      const key = envKey(line);
+      return key === null || !owned(key);
+    });
+  const text = [
+    ...bundleLines.filter((line, index, all) => !(line === '' && (index === 0 || all[index - 1] === ''))),
+    ...targetLines,
+  ].join('\n');
+  return { text: text === '' ? null : `${text}\n`, kept: [...new Set(targetLines.map((line) => envKey(line)!))] };
 }
 
 function hasTable(db: Database.Database, name: string): boolean {
@@ -404,6 +443,13 @@ export async function restoreBundle(options: RestoreOptions): Promise<RestoreRes
       neutraliseSessionMailboxes(path.join(stagedData, 'v2-sessions'));
     }
 
+    // This machine's own infrastructure settings win over the backup's.
+    const merged = mergeTargetOwnedEnv(
+      envText,
+      fs.existsSync(host.envFile) ? fs.readFileSync(host.envFile, 'utf8') : null,
+    );
+    envText = merged.text;
+
     // 5. Swap. Children move; the roots themselves stay.
     for (const root of roots) {
       moveChildren(root.real, root.previous, TXN_DIR);
@@ -440,7 +486,16 @@ export async function restoreBundle(options: RestoreOptions): Promise<RestoreRes
     writeJournal(txnDir, journal);
     fs.rmSync(miscStage, { recursive: true, force: true });
 
-    return { txn, txnDir, plan, mode, rebuildGroups: fixups.rebuildGroups, droppedEnvKeys, upgradeMarkerPreserved };
+    return {
+      txn,
+      txnDir,
+      plan,
+      mode,
+      rebuildGroups: fixups.rebuildGroups,
+      keptEnvKeys: merged.kept,
+      droppedEnvKeys,
+      upgradeMarkerPreserved,
+    };
   } catch (error) {
     // Anything that failed before or during the swap is put back.
     await rollbackRestore(host, txn).catch(() => undefined);

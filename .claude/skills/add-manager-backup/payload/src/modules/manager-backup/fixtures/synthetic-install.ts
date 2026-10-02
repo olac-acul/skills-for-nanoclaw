@@ -140,6 +140,8 @@ export function createSyntheticInstall(root: string, input: SyntheticOptions): S
     path.join(project, '.env'),
     [
       `NANOCLAW_NAME=${options.label}`,
+      `ONECLI_URL=http://${options.label}-gateway.test:10254`,
+      `NANOCLAW_GATEWAY_PROVIDER=gw-${options.label}`,
       'OPENCODE_MODEL=openai/test',
       'OPENCODE_API_TOKEN=synthetic',
       'TELEGRAM_BOT_TOKEN=synthetic',

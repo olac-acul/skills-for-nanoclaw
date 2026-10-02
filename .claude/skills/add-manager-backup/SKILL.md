@@ -119,7 +119,7 @@ mounted `data/` keeps its identity), and keeps the displaced state for rollback.
 
 - **Older backup:** restored, and the host applies the newer migrations on first start. **Backup from newer code:** refused; update NanoClaw first.
 - The restored database is made ready for a clean start: sessions marked stopped, host leases and session claims cleared, derived image tags cleared (the command lists the groups to rebuild).
-- This install's own upgrade marker is kept, so the startup check does not trip.
+- This install's own upgrade marker is kept, so the startup check does not trip. So are its own gateway and panel settings in `.env` (`ONECLI_*`, `NANOCLAW_GATEWAY_PROVIDER`, `PANEL_*`, `no_proxy`): they describe this machine, not the data, and restoring a backup from another machine must not point the install at a gateway that is not there.
 - `--rehearsal` restores a copy that cannot act as the original: it keeps only a short allowlist of `.env` settings (no tokens or secrets), restores no channel stores or identity files, and pauses pending tasks and chats. Use it to test a backup on a second machine while the original is running.
 
 After starting the service and checking it works:

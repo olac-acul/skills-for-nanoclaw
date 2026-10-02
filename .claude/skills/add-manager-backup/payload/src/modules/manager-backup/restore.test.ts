@@ -13,6 +13,7 @@ import {
   RestoreError,
   commitRestore,
   filterEnvForRehearsal,
+  mergeTargetOwnedEnv,
   planRestore,
   restoreBundle,
   rollbackRestore,
@@ -241,6 +242,26 @@ describe('rehearsal mode', () => {
     ]);
     // The conversation history itself is kept.
     expect(fs.readFileSync(path.join(target.project, 'groups', 'g1', 'CLAUDE.local.md'), 'utf8')).toBe('source-memory');
+  });
+});
+
+describe('infrastructure settings of the target', () => {
+  it('keeps the gateway and panel settings of this machine instead of those in the backup', async () => {
+    const result = await restoreBundle({ host: target.host, bundleFile, key, mode: 'full' });
+    const env = fs.readFileSync(path.join(target.project, '.env'), 'utf8');
+    expect(env).toContain('NANOCLAW_NAME=source'); // data-level setting comes from the backup
+    expect(env).toContain('ONECLI_URL=http://target-gateway.test:10254');
+    expect(env).toContain('NANOCLAW_GATEWAY_PROVIDER=gw-target');
+    expect(env).not.toContain('source-gateway');
+    expect(result.keptEnvKeys.sort()).toEqual(['NANOCLAW_GATEWAY_PROVIDER', 'ONECLI_URL']);
+  });
+
+  it('merges without touching other lines', () => {
+    const merged = mergeTargetOwnedEnv('A=1\nONECLI_URL=old\n\n\nB=2\n', 'X=9\nONECLI_URL=new\nPANEL_PORT=4000\n');
+    expect(merged.text).toBe('A=1\n\nB=2\nONECLI_URL=new\nPANEL_PORT=4000\n');
+    expect(merged.kept).toEqual(['ONECLI_URL', 'PANEL_PORT']);
+    expect(mergeTargetOwnedEnv(null, 'A=1\n')).toEqual({ text: null, kept: [] });
+    expect(mergeTargetOwnedEnv('A=1\n', null)).toEqual({ text: 'A=1\n', kept: [] });
   });
 });
 

@@ -178,6 +178,8 @@ async function main(): Promise<void> {
       console.log(
         `Rebuild derived images for: ${result.rebuildGroups.join(', ')} (ncl groups restart --id <group> --rebuild)`,
       );
+    if (result.keptEnvKeys.length)
+      console.log(`Kept this machine's own settings in .env instead of the backup's: ${result.keptEnvKeys.join(', ')}`);
     if (result.droppedEnvKeys.length)
       console.log(`Rehearsal dropped these .env keys: ${result.droppedEnvKeys.join(', ')}`);
     if (!result.upgradeMarkerPreserved)
