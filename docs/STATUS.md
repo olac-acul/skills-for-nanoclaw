@@ -39,13 +39,21 @@ Docker Compose stack of our own and no channels preconfigured:
       71 tests; applies cleanly to upstream `main` with upstream's own engine
       (`node scripts/compose.mjs`); CLI exercised end to end on a scratch install.
 
+- [x] `add-manager-panel` skill: server with Host/Origin/CSRF/Sec-Fetch checks, scrypt login
+      with persistent throttle, sessions, re-authentication window, LAN-only guard,
+      overview, agents (restart), model switch for all agents with rollback journal,
+      backups (create/verify/download/delete, key shown once), setup CLI.
+      110 tests including an end-to-end run on a migrated upstream database; both skills
+      apply to upstream `main` on GitHub Actions with Node 22.
+
 ## Next
 
 - [ ] Spikes needing Docker (OneCLI install, bind address, HTTP model endpoint,
       real container drain). Needs a clean Docker host; the existing test LXC runs
       another stack on the ports OneCLI needs.
-- [ ] `add-manager-panel`: server, auth, sessions, UI, then model settings, agents,
-      backups (using `BackupService` in-process).
+- [ ] Look at the panel UI in a real browser (the Chrome extension was not connected
+      in the last session; `spikes/panel-dev.ts` in the test bed serves the real
+      panel with fake data on 127.0.0.1:3299). Only static checks cover the UI script so far.
 - [ ] Gateway state: decide per the "re-enter credentials" decision; document the
       reinstall checklist printed after a restore.
 - [ ] Restore on a different machine from a real install (needs Docker host).
