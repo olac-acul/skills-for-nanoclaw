@@ -27,6 +27,12 @@ test('flags LAN-only hostnames but not .test names', () => {
   assert.deepEqual(scanText('http://model.test/v1', 'f'), []);
 });
 
+test('does not mistake file names for LAN hostnames', () => {
+  assert.deepEqual(scanText('groups/x/CLAUDE.local.md', 'f'), []);
+  assert.equal(scanText(`ping nas.${'local'}.`, 'f')[0].rule, 'private-hostname');
+  assert.equal(scanText(`http://nas.${'lan'}:8080/x`, 'f')[0].rule, 'private-hostname');
+});
+
 test('flags personal emails and accepts anonymous ones', () => {
   assert.equal(scanText(`contact ${mail('someone', 'gmail.com')}`, 'f')[0].rule, 'email');
   for (const ok of [mail('1+user', 'users.noreply.github.com'), mail('a', 'example.com'), mail('a', 'host.test'), 'noreply@anthropic.com']) {

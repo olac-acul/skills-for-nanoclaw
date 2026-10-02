@@ -169,6 +169,8 @@ export interface PackItem {
   meta: TarEntryMeta;
   /** Absolute source path for regular files; read exactly `meta.size` bytes. */
   source?: string;
+  /** Small in-memory content for regular files (takes precedence over `source`). */
+  content?: Buffer;
 }
 
 const END_OF_ARCHIVE = Buffer.alloc(BLOCK * 2);
@@ -178,8 +180,15 @@ export async function* packEntries(items: AsyncIterable<PackItem> | Iterable<Pac
   for await (const item of items as AsyncIterable<PackItem>) {
     yield encodeEntryHeader(item.meta);
     if (item.meta.type !== 'file' || item.meta.size === 0) continue;
-    if (!item.source) throw new TarError('missing_source', `no source for ${item.meta.path}`);
-    yield* readExactly(item.source, item.meta.size, item.meta.path);
+    if (item.content) {
+      if (item.content.length !== item.meta.size)
+        throw new TarError('size_mismatch', `${item.meta.path} content length differs from its header`);
+      yield item.content;
+    } else if (item.source) {
+      yield* readExactly(item.source, item.meta.size, item.meta.path);
+    } else {
+      throw new TarError('missing_source', `no source for ${item.meta.path}`);
+    }
     yield padding(item.meta.size);
   }
   yield END_OF_ARCHIVE;
@@ -210,6 +219,15 @@ export interface WalkOptions {
   prefix: string;
   /** Return false to leave an entry (and, for a directory, everything below it) out. */
   include?: (relativePath: string, stat: fs.Stats) => boolean;
+  /**
+   * Replace the content of a regular file, e.g. with a consistent snapshot of a
+   * live SQLite database. Return null to archive the file as it is.
+   */
+  substitute?: (
+    relativePath: string,
+    stat: fs.Stats,
+    fullPath: string,
+  ) => Promise<{ source: string; size: number } | null>;
 }
 
 /**
@@ -244,7 +262,11 @@ export async function* walkTree(options: WalkOptions): AsyncGenerator<PackItem> 
           yield { meta: { ...common, path: archivePath, type: 'hardlink', size: 0, linkpath: first } };
         } else {
           if (stat.nlink > 1) seen.set(key, archivePath);
-          yield { meta: { ...common, path: archivePath, type: 'file', size: stat.size }, source: full };
+          const replaced = options.substitute ? await options.substitute(rel, stat, full) : null;
+          yield {
+            meta: { ...common, path: archivePath, type: 'file', size: replaced?.size ?? stat.size },
+            source: replaced?.source ?? full,
+          };
         }
       }
     }

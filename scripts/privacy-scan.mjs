@@ -39,7 +39,8 @@ export const RULES = [
   {
     id: 'private-hostname',
     description: 'LAN-only hostname (.lan, .local, .internal, .home.arpa)',
-    pattern: /\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:lan|local|internal|home\.arpa|localdomain)\b/gi,
+    // The lookahead keeps file names such as CLAUDE.local.md from matching.
+    pattern: /\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:lan|local|internal|home\.arpa|localdomain)\b(?!\.[a-z0-9])/gi,
   },
   {
     id: 'credential',

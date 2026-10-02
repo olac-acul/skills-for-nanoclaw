@@ -146,29 +146,37 @@ export async function* decryptStream(cipher: AsyncIterable<Buffer>, key: Buffer)
     return all.subarray(0, size);
   };
 
-  await fill(HEADER_BYTES);
-  const header = take(HEADER_BYTES);
-  if (header.length < HEADER_BYTES) throw new CryptoError('truncated', 'bundle is shorter than its header');
-  if (!header.subarray(0, 4).equals(MAGIC)) throw new CryptoError('bad_format', 'not a manager backup bundle');
-  if (header[4] !== VERSION) throw new CryptoError('bad_format', `unsupported bundle version ${header[4]}`);
-  const chunkLog2 = header[5];
-  if (chunkLog2 < 10 || chunkLog2 > 26) throw new CryptoError('bad_format', 'invalid chunk size');
-  const sealedSize = 2 ** chunkLog2 + TAG_BYTES;
-  const salt = header.subarray(6, 22);
-  const prefix = header.subarray(22, 29);
-  const subkey = deriveKey(key, salt);
+  try {
+    yield* decryptChunks();
+  } finally {
+    await iterator.return?.();
+  }
 
-  let index = 0;
-  for (;;) {
-    // Read one chunk plus one byte: if nothing follows, this chunk is the final one.
-    await fill(sealedSize + 1);
-    if (heldBytes === 0) throw new CryptoError('truncated', 'bundle ends before its final chunk');
-    const isFinal = heldBytes <= sealedSize;
-    const sealed = take(isFinal ? heldBytes : sealedSize);
-    if (isFinal && sealed.length < TAG_BYTES) throw new CryptoError('truncated', 'bundle ends inside a chunk');
-    const plain = open(subkey, chunkNonce(prefix, index, isFinal), header, sealed);
-    if (plain.length > 0) yield plain;
-    if (isFinal) break;
-    index++;
+  async function* decryptChunks(): AsyncGenerator<Buffer> {
+    await fill(HEADER_BYTES);
+    const header = take(HEADER_BYTES);
+    if (header.length < HEADER_BYTES) throw new CryptoError('truncated', 'bundle is shorter than its header');
+    if (!header.subarray(0, 4).equals(MAGIC)) throw new CryptoError('bad_format', 'not a manager backup bundle');
+    if (header[4] !== VERSION) throw new CryptoError('bad_format', `unsupported bundle version ${header[4]}`);
+    const chunkLog2 = header[5];
+    if (chunkLog2 < 10 || chunkLog2 > 26) throw new CryptoError('bad_format', 'invalid chunk size');
+    const sealedSize = 2 ** chunkLog2 + TAG_BYTES;
+    const salt = header.subarray(6, 22);
+    const prefix = header.subarray(22, 29);
+    const subkey = deriveKey(key, salt);
+
+    let index = 0;
+    for (;;) {
+      // Read one chunk plus one byte: if nothing follows, this chunk is the final one.
+      await fill(sealedSize + 1);
+      if (heldBytes === 0) throw new CryptoError('truncated', 'bundle ends before its final chunk');
+      const isFinal = heldBytes <= sealedSize;
+      const sealed = take(isFinal ? heldBytes : sealedSize);
+      if (isFinal && sealed.length < TAG_BYTES) throw new CryptoError('truncated', 'bundle ends inside a chunk');
+      const plain = open(subkey, chunkNonce(prefix, index, isFinal), header, sealed);
+      if (plain.length > 0) yield plain;
+      if (isFinal) break;
+      index++;
+    }
   }
 }
