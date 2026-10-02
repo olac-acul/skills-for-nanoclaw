@@ -12,7 +12,7 @@
  * upstream's engine) is a separate step; this harness is the fast inner loop.
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { relative } from 'node:path';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const testbed = resolve(process.env.TESTBED ?? join(repo, '..', 'nanoclaw-testbed', 'upstream'));
 const skillsDir = join(repo, '.claude', 'skills');
+const DEFAULT_TARGETS = ['src/modules/manager-backup', 'src/modules/manager-panel'];
 
 function payloadRoots() {
   if (!existsSync(skillsDir)) return [];
@@ -28,12 +29,27 @@ function payloadRoots() {
     .filter((dir) => existsSync(dir) && statSync(dir).isDirectory());
 }
 
+/** Apply the `nc:append` lines of every SKILL.md so the test bed is wired like a real install. */
+function wire() {
+  for (const name of existsSync(skillsDir) ? readdirSync(skillsDir) : []) {
+    const skill = join(skillsDir, name, 'SKILL.md');
+    if (!existsSync(skill)) continue;
+    for (const match of readFileSync(skill, 'utf8').matchAll(/```nc:append to:(\S+)[^\n]*\n([\s\S]*?)```/g)) {
+      const target = join(testbed, match[1]);
+      const current = existsSync(target) ? readFileSync(target, 'utf8') : '';
+      const missing = match[2].split('\n').filter((line) => line.trim() && !current.split('\n').includes(line));
+      if (missing.length) writeFileSync(target, `${current.replace(/\n*$/, '\n')}${missing.join('\n')}\n`);
+    }
+  }
+}
+
 function sync() {
   if (!existsSync(join(testbed, 'package.json'))) {
     console.error(`test bed not found at ${testbed} (set TESTBED)`);
     process.exit(2);
   }
   for (const root of payloadRoots()) cpSync(root, testbed, { recursive: true });
+  wire();
   console.log(`synced ${payloadRoots().length} payload(s) into ${testbed}`);
 }
 
@@ -71,16 +87,18 @@ if (command === 'sync') {
   sync();
 } else if (command === 'fix') {
   sync();
-  run('prettier', ['--write', ...(rest.length ? rest : ['src/modules/manager-backup', 'scripts/manager-backup.ts', 'scripts/tsconfig.manager-backup.json'])]);
+  run('prettier', ['--write', ...(rest.length ? rest : [...DEFAULT_TARGETS, 'scripts/manager-backup.ts', 'scripts/manager-panel.ts'])]);
   pull();
 } else if (command === 'check') {
   sync();
-  const targets = rest.length ? rest : ['src/modules/manager-backup'];
+  const targets = rest.length ? rest : DEFAULT_TARGETS;
+  const scriptConfigs = ['manager-backup', 'manager-panel'].filter((name) => existsSync(join(testbed, 'scripts', `tsconfig.${name}.json`)));
+  const scriptFiles = ['manager-backup', 'manager-panel'].map((name) => `scripts/${name}.ts`).filter((file) => existsSync(join(testbed, file)));
   const failures = [
     run('tsc', ['--noEmit']),
-    ...(existsSync(join(testbed, 'scripts', 'tsconfig.manager-backup.json')) ? [run('tsc', ['-p', 'scripts/tsconfig.manager-backup.json'])] : []),
+    ...scriptConfigs.map((name) => run('tsc', ['-p', `scripts/tsconfig.${name}.json`])),
     run('eslint', targets),
-    run('prettier', ['--check', ...targets, ...(existsSync(join(testbed, 'scripts', 'manager-backup.ts')) ? ['scripts/manager-backup.ts'] : [])]),
+    run('prettier', ['--check', ...targets, ...scriptFiles]),
     run('vitest', ['run', ...targets]),
   ].filter((status) => status !== 0);
   process.exit(failures.length ? 1 : 0);

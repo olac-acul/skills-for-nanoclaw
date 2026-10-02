@@ -1,0 +1,500 @@
+/**
+ * The panel's API: what each endpoint requires and what it returns.
+ *
+ * Responses are built field by field from the backend's data; nothing is
+ * passed through. Internal ids never leave the process (agents get keyed
+ * hashes), and no endpoint returns a credential, a path, or a log line.
+ */
+import { CryptoError } from '../manager-backup/crypto.js';
+import { BackupError } from '../manager-backup/service.js';
+import { AuthError, type Auth } from './auth.js';
+import type { PanelBackend } from './backend.js';
+import { ModelSettingsError, applyModelChange, previewModelChange, readModelStatus } from './model-settings.js';
+import { publicId, resolveId } from './opaque-id.js';
+import type { Session } from './sessions.js';
+import type { PanelState } from './state.js';
+import { InvalidBody, fields, noBody } from './validate.js';
+
+export class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    readonly headers: Record<string, string> = {},
+    readonly detail?: string,
+  ) {
+    super(code);
+  }
+}
+
+export interface Reply {
+  status: number;
+  body?: unknown;
+  headers?: Record<string, string>;
+  file?: { path: string; filename: string };
+}
+
+export interface RouteDeps {
+  backend: PanelBackend;
+  auth: Auth;
+  state: PanelState;
+  /** The browser reaches the panel over plain HTTP (a banner is shown). */
+  insecureHttp: boolean;
+  setCookie(token: string): string;
+  clearCookie(): string;
+  /** How long a hot backup waits for running agents. */
+  backupWaitMs: number;
+}
+
+export interface RouteContext {
+  params: string[];
+  body: unknown;
+  session: Session | null;
+  token: string | undefined;
+  deps: RouteDeps;
+}
+
+export type LimitClass = 'read' | 'mutation' | 'probe' | 'login';
+
+export interface Route {
+  name: string;
+  method: 'GET' | 'POST' | 'DELETE';
+  pattern: RegExp;
+  access: 'anon' | 'session';
+  /** Changes state: needs a matching Origin and the CSRF token. */
+  mutating: boolean;
+  /** Needs the password re-entered within the last few minutes. */
+  reauth?: boolean;
+  limit: LimitClass;
+  parse(raw: unknown): unknown;
+  run(ctx: RouteContext): Promise<Reply>;
+}
+
+const BACKUP_ID = '(\\d{8}T\\d{6}Z-[0-9a-f]{6})';
+const PUBLIC = '([A-Za-z0-9_-]{22})';
+
+function sessionView(deps: RouteDeps, session: Session): Record<string, unknown> {
+  return { ...deps.auth.sessions.view(session), insecure_http: deps.insecureHttp };
+}
+
+async function loadAgent(ctx: RouteContext, given: string) {
+  const agents = await ctx.deps.backend.agents();
+  const found = resolveId(ctx.deps.state.idKey(), 'agent', agents, given);
+  if (!found) throw new HttpError(404, 'not_found');
+  return { found, agents };
+}
+
+export function buildRoutes(): Route[] {
+  const routes: Route[] = [];
+  const add = (route: Route): void => {
+    routes.push(route);
+  };
+
+  add({
+    name: 'health',
+    method: 'GET',
+    pattern: /^\/api\/v1\/health$/,
+    access: 'anon',
+    mutating: false,
+    limit: 'read',
+    parse: noBody,
+    run: async () => ({ status: 200, body: { status: 'ok' } }),
+  });
+
+  add({
+    name: 'setup_state',
+    method: 'GET',
+    pattern: /^\/api\/v1\/setup$/,
+    access: 'anon',
+    mutating: false,
+    limit: 'read',
+    parse: noBody,
+    run: async (ctx) => ({ status: 200, body: { needed: ctx.deps.auth.setupNeeded() } }),
+  });
+
+  add({
+    name: 'setup',
+    method: 'POST',
+    pattern: /^\/api\/v1\/setup$/,
+    access: 'anon',
+    mutating: true,
+    limit: 'login',
+    parse: (raw) =>
+      fields<{ code: string; password: string }>(raw, {
+        code: { type: 'string', max: 64 },
+        password: { type: 'string', max: 4096 },
+      }),
+    run: async (ctx) => {
+      const { code, password } = ctx.body as { code: string; password: string };
+      const created = await ctx.deps.auth.setup(code, password);
+      return {
+        status: 200,
+        body: sessionView(ctx.deps, created.session),
+        headers: { 'set-cookie': ctx.deps.setCookie(created.token) },
+      };
+    },
+  });
+
+  add({
+    name: 'login',
+    method: 'POST',
+    pattern: /^\/api\/v1\/session$/,
+    access: 'anon',
+    mutating: true,
+    limit: 'login',
+    parse: (raw) => fields<{ password: string }>(raw, { password: { type: 'string', max: 4096 } }),
+    run: async (ctx) => {
+      const created = await ctx.deps.auth.login((ctx.body as { password: string }).password, ctx.token);
+      return {
+        status: 200,
+        body: sessionView(ctx.deps, created.session),
+        headers: { 'set-cookie': ctx.deps.setCookie(created.token) },
+      };
+    },
+  });
+
+  add({
+    name: 'session',
+    method: 'GET',
+    pattern: /^\/api\/v1\/session$/,
+    access: 'session',
+    mutating: false,
+    limit: 'read',
+    parse: noBody,
+    run: async (ctx) => ({ status: 200, body: sessionView(ctx.deps, ctx.session!) }),
+  });
+
+  add({
+    name: 'logout',
+    method: 'DELETE',
+    pattern: /^\/api\/v1\/session$/,
+    access: 'session',
+    mutating: true,
+    limit: 'mutation',
+    parse: noBody,
+    run: async (ctx) => {
+      ctx.deps.auth.sessions.destroy(ctx.token);
+      return { status: 204, headers: { 'set-cookie': ctx.deps.clearCookie() } };
+    },
+  });
+
+  add({
+    name: 'reauth',
+    method: 'POST',
+    pattern: /^\/api\/v1\/session\/reauth$/,
+    access: 'session',
+    mutating: true,
+    limit: 'login',
+    parse: (raw) => fields<{ password: string }>(raw, { password: { type: 'string', max: 4096 } }),
+    run: async (ctx) => {
+      await ctx.deps.auth.reauth(ctx.session!, (ctx.body as { password: string }).password);
+      return { status: 200, body: sessionView(ctx.deps, ctx.session!) };
+    },
+  });
+
+  add({
+    name: 'overview',
+    method: 'GET',
+    pattern: /^\/api\/v1\/overview$/,
+    access: 'session',
+    mutating: false,
+    limit: 'read',
+    parse: noBody,
+    run: async (ctx) => {
+      const o = await ctx.deps.backend.overview();
+      const backups = ctx.deps.backend.backups.list();
+      return {
+        status: 200,
+        body: {
+          release: o.release,
+          gateway: o.gateway,
+          channels: o.channels,
+          providers: o.providers,
+          agents: o.agents,
+          running_agents: o.runningAgents,
+          sessions: o.sessions,
+          uptime_seconds: o.uptimeSeconds,
+          backups: { count: backups.length, latest: backups[0]?.createdAt ?? null },
+        },
+      };
+    },
+  });
+
+  add({
+    name: 'agents',
+    method: 'GET',
+    pattern: /^\/api\/v1\/agents$/,
+    access: 'session',
+    mutating: false,
+    limit: 'read',
+    parse: noBody,
+    run: async (ctx) => {
+      const key = ctx.deps.state.idKey();
+      const agents = await ctx.deps.backend.agents();
+      return {
+        status: 200,
+        body: {
+          agents: agents.map((a) => ({
+            id: publicId(key, 'agent', a.id),
+            name: a.name,
+            provider: a.provider,
+            model: a.model,
+            running: a.running,
+            sessions: a.sessions,
+          })),
+        },
+      };
+    },
+  });
+
+  add({
+    name: 'agent_restart',
+    method: 'POST',
+    pattern: new RegExp(`^/api/v1/agents/${PUBLIC}/restart$`),
+    access: 'session',
+    mutating: true,
+    limit: 'mutation',
+    parse: noBody,
+    run: async (ctx) => {
+      const { found } = await loadAgent(ctx, ctx.params[0]);
+      await ctx.deps.backend.restartAgent(found.id);
+      return { status: 202, body: { status: 'restarting' } };
+    },
+  });
+
+  add({
+    name: 'channels',
+    method: 'GET',
+    pattern: /^\/api\/v1\/channels$/,
+    access: 'session',
+    mutating: false,
+    limit: 'read',
+    parse: noBody,
+    run: async (ctx) => ({
+      status: 200,
+      body: { channels: (await ctx.deps.backend.channels()).map((c) => ({ type: c.type, chats: c.chats })) },
+    }),
+  });
+
+  add({
+    name: 'model',
+    method: 'GET',
+    pattern: /^\/api\/v1\/model$/,
+    access: 'session',
+    mutating: false,
+    limit: 'read',
+    parse: noBody,
+    run: async (ctx) => {
+      const key = ctx.deps.state.idKey();
+      const names = new Map((await ctx.deps.backend.agents()).map((a) => [a.id, a.name]));
+      const status = await readModelStatus(ctx.deps.backend.model);
+      return {
+        status: 200,
+        body: {
+          provider: status.provider,
+          base_url: status.baseUrl,
+          model: status.model,
+          small_model: status.smallModel,
+          interrupted: status.interrupted,
+          groups: status.groups.map((g) => ({
+            id: publicId(key, 'agent', g.id),
+            name: names.get(g.id) ?? 'agent',
+            provider: g.provider,
+            model: g.model,
+            follows_settings: g.followsSettings,
+          })),
+        },
+      };
+    },
+  });
+
+  const modelBody = (raw: unknown): unknown =>
+    fields<{ baseUrl: string; model: string; smallModel?: string }>(raw, {
+      baseUrl: { type: 'string', max: 2048 },
+      model: { type: 'string', max: 200 },
+      smallModel: { type: 'string', max: 200, optional: true },
+    });
+
+  add({
+    name: 'model_preflight',
+    method: 'POST',
+    pattern: /^\/api\/v1\/model\/preflight$/,
+    access: 'session',
+    mutating: true,
+    limit: 'probe',
+    parse: modelBody,
+    run: async (ctx) => {
+      const preview = await previewModelChange(ctx.deps.backend.model, ctx.body as { baseUrl: string; model: string });
+      return {
+        status: 200,
+        body: {
+          ok: preview.probe.reason === null,
+          reason: preview.probe.reason,
+          models: preview.probe.models,
+          context_limit: preview.probe.contextLimit,
+          local: preview.probe.local, // privacy-scan: allow -- property name or synthetic test input
+          agents_affected: preview.groupsAffected,
+          restarts_needed: preview.restartsNeeded,
+        },
+      };
+    },
+  });
+
+  add({
+    name: 'model_apply',
+    method: 'POST',
+    pattern: /^\/api\/v1\/model\/apply$/,
+    access: 'session',
+    mutating: true,
+    reauth: true,
+    limit: 'mutation',
+    parse: modelBody,
+    run: async (ctx) => {
+      const outcome = await applyModelChange(ctx.deps.backend.model, ctx.body as { baseUrl: string; model: string });
+      return {
+        status: 200,
+        body: {
+          agents: outcome.groups,
+          restarted: outcome.restarted,
+          restart_failures: outcome.restartFailures.length,
+        },
+      };
+    },
+  });
+
+  add({
+    name: 'backups',
+    method: 'GET',
+    pattern: /^\/api\/v1\/backups$/,
+    access: 'session',
+    mutating: false,
+    limit: 'read',
+    parse: noBody,
+    run: async (ctx) => ({ status: 200, body: { backups: ctx.deps.backend.backups.list().map(backupView) } }),
+  });
+
+  add({
+    name: 'backup_create',
+    method: 'POST',
+    pattern: /^\/api\/v1\/backups$/,
+    access: 'session',
+    mutating: true,
+    reauth: true,
+    limit: 'mutation',
+    parse: (raw) => fields<{ force?: boolean }>(raw, { force: { type: 'boolean', optional: true } }),
+    run: async (ctx) => {
+      const { force } = ctx.body as { force?: boolean };
+      const { record, key } = await ctx.deps.backend.backups.create({
+        waitMs: ctx.deps.backupWaitMs,
+        force: force === true,
+      });
+      return { status: 201, body: { backup: backupView(record), key } };
+    },
+  });
+
+  add({
+    name: 'backup_verify',
+    method: 'POST',
+    pattern: new RegExp(`^/api/v1/backups/${BACKUP_ID}/verify$`),
+    access: 'session',
+    mutating: true,
+    limit: 'probe',
+    parse: (raw) => fields<{ key: string }>(raw, { key: { type: 'string', max: 128 } }),
+    run: async (ctx) => {
+      const result = await ctx.deps.backend.backups.verify(ctx.params[0], (ctx.body as { key: string }).key);
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          entries: result.entries,
+          files: result.files,
+          bytes: result.bytes,
+          release: result.manifest.source.version,
+          consistency: result.manifest.consistency,
+        },
+      };
+    },
+  });
+
+  add({
+    name: 'backup_delete',
+    method: 'DELETE',
+    pattern: new RegExp(`^/api/v1/backups/${BACKUP_ID}$`),
+    access: 'session',
+    mutating: true,
+    reauth: true,
+    limit: 'mutation',
+    parse: noBody,
+    run: async (ctx) => {
+      ctx.deps.backend.backups.delete(ctx.params[0]);
+      return { status: 204 };
+    },
+  });
+
+  add({
+    name: 'backup_download',
+    method: 'GET',
+    pattern: new RegExp(`^/api/v1/backups/${BACKUP_ID}/download$`),
+    access: 'session',
+    mutating: false,
+    reauth: true,
+    limit: 'mutation',
+    parse: noBody,
+    run: async (ctx) => {
+      const file = ctx.deps.backend.backups.fileFor(ctx.params[0]);
+      return { status: 200, file: { path: file, filename: `${ctx.params[0]}.mbk` } };
+    },
+  });
+
+  return routes;
+}
+
+function backupView(record: {
+  id: string;
+  createdAt: string;
+  bytes: number;
+  release: string;
+  consistency: string;
+  machineIdentity: boolean;
+}): Record<string, unknown> {
+  return {
+    id: record.id,
+    created_at: record.createdAt,
+    bytes: record.bytes,
+    release: record.release,
+    consistency: record.consistency,
+    machine_identity: record.machineIdentity,
+  };
+}
+
+/** Turn anything a handler throws into a public error: a stable code, never internals. */
+export function toHttpError(error: unknown): HttpError {
+  if (error instanceof HttpError) return error;
+  if (error instanceof AuthError) {
+    return new HttpError(
+      error.status,
+      error.code,
+      error.retryAfterSeconds ? { 'retry-after': String(error.retryAfterSeconds) } : {},
+    );
+  }
+  if (error instanceof ModelSettingsError) {
+    const status =
+      error.code === 'invalid_input'
+        ? 400
+        : error.code === 'probe_failed'
+          ? 422
+          : error.code === 'change_in_progress'
+            ? 409
+            : 500;
+    return new HttpError(status, error.code, {}, error.detail);
+  }
+  if (error instanceof BackupError) {
+    return new HttpError(
+      error.code === 'not_found' ? 404 : error.code === 'invalid_id' ? 400 : 409,
+      error.code === 'agents_busy' ? 'agents_busy' : error.code,
+    );
+  }
+  if (error instanceof CryptoError)
+    return new HttpError(400, error.code === 'bad_key' ? 'invalid_key' : 'key_or_bundle_rejected');
+  if (error instanceof InvalidBody) return new HttpError(400, 'invalid_request');
+  return new HttpError(500, 'internal_error');
+}

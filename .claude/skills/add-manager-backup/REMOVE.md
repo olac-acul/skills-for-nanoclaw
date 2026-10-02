@@ -13,7 +13,7 @@ not touched; delete them yourself if you want them gone.
 
    The files are:
 
-```
+```text files
 scripts/manager-backup.ts
 scripts/tsconfig.manager-backup.json
 src/modules/manager-backup/bundle.test.ts
