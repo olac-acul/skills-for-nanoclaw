@@ -36,6 +36,8 @@ node scripts/privacy-scan.mjs --all         # privacy gate over tracked files
 git config core.hooksPath .githooks         # enable the pre-commit gate
 ```
 
+The pre-commit hook also regenerates what is derived from hand-written files (the guide page served by the panel from `docs/guide.md`, and the file lists in each skill's `SKILL.md` and `REMOVE.md`), so a commit never carries a stale copy. Edit `docs/guide.md`, commit, and the generated file is part of the same commit.
+
 The privacy gate blocks private network addresses, personal emails,
 credentials and non-anonymous git identities. Use synthetic data in tests
 (`100.64.x.x` addresses, `.test` names, `example.*` emails).

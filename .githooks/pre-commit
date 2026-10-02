@@ -1,4 +1,16 @@
 #!/bin/sh
-# Blocks commits that publish private addresses, personal emails, secrets,
-# or use a non-anonymous git identity. See scripts/privacy-scan.mjs.
-exec node "$(git rev-parse --show-toplevel)/scripts/privacy-scan.mjs" --identity --staged
+# 1. Regenerate what is derived from hand-written sources, so a commit never carries a stale copy:
+#      docs/guide.md           -> the page the panel serves (guide-html.ts)
+#      each skill's payload/   -> the file lists in its SKILL.md and REMOVE.md
+# 2. Block commits that publish private addresses, personal emails, secrets, or a non-anonymous git
+#    identity. See scripts/privacy-scan.mjs.
+set -e
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+node scripts/build-guide.mjs > /dev/null
+node scripts/sync-skill-lists.mjs > /dev/null
+git add -- .claude/skills/add-manager-panel/payload/src/modules/manager-panel/guide-html.ts
+for skill in .claude/skills/*/; do
+  git add -- "${skill}SKILL.md" "${skill}REMOVE.md" 2> /dev/null || true
+done
+exec node scripts/privacy-scan.mjs --identity --staged

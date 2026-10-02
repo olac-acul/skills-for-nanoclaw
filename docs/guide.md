@@ -603,6 +603,7 @@ State-changing calls need the cookie, the `X-CSRF-Token` header and an `Origin` 
 
 ## Known limits
 
+- The Model page connects one OpenAI-compatible endpoint. Presets for ChatGPT, Claude and Ollama are not in the panel yet.
 - Restoring and updating are terminal-only.
 - Credentials in the gateway are not part of backups.
 - The panel starts and stops with NanoClaw; it cannot start NanoClaw.
