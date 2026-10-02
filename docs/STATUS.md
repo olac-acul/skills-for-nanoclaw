@@ -31,10 +31,12 @@ Docker Compose stack of our own and no channels preconfigured:
 - [x] Spike 1: consistent snapshots of the central DB and of session mailboxes
       while another process writes (see `spikes.md`).
 
+- [x] Spike 2: host-caller `dispatch` runs approval-gated `ncl` commands directly.
+- [x] Spike 3: `node-tar` hangs with default concurrency on Node 26; own minimal tar chosen.
+
 ## Next
 
-- [ ] Spike 2: can a host module change group config without interactive approval?
-- [ ] Spike 3: tar library behaviour (hardlinks, symlinks, numeric owners).
+- [ ] Own minimal tar writer/reader (replaces the tar-library question, see spikes).
 - [ ] Spike 4: inbound hold + admission close during a snapshot.
 - [ ] Spikes needing Docker (OneCLI install, bind address, HTTP model endpoint).
 - [ ] First skill: `add-manager-backup` (CLI first, then panel integration).

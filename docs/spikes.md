@@ -52,3 +52,27 @@ instead. Conclusion: a host module (panel, CLI) can reuse the exact `ncl`
 validation and persistence by calling `dispatch` as the host. No approval
 prompt, no direct SQL against `container_configs`. `restartAgentGroupContainers`
 is exported for the restart step.
+
+## Spike 3: tar handling for the backup bundle
+
+`node-tar` 7.5.22 on Node 26.10:
+
+- **Hang.** With the default `jobs: 4`, packing a small tree (a 5 MB file, a
+  hardlink pair, symlinks) never completes and never errors; `jobs: 1` or
+  `jobs: 2` completes. Each entry alone, and several pairs, packed fine. I could
+  not test Node 22 (not installed here), so whether this is specific to Node 26
+  is unknown. Either way a silent hang in a backup path is unacceptable.
+- Upstream NanoClaw does not depend on `tar`, so adding it would be a new
+  dependency in every install.
+
+Decision: write a small purpose-built archive writer/reader (ustar + PAX headers
+only, no GNU extensions), used only for bundles this tool itself produces.
+Benefits: no dependency, no concurrency surprises, and the reader can reject
+anything the writer would never emit (unknown type flags, absolute or `..`
+paths, duplicate members, links that leave the allowed subtree, hardlinks to
+anything but an earlier regular file in the same archive). Numeric uid/gid are
+stored in the headers and applied explicitly on restore.
+
+To verify when it is written: symlink write-through attack (symlink `a` then a
+file `a/x`), hardlink fidelity, dangling absolute symlinks (container skill
+links), numeric owners, multi-GB streaming memory use.
