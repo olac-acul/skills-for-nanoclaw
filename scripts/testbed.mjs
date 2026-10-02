@@ -71,15 +71,16 @@ if (command === 'sync') {
   sync();
 } else if (command === 'fix') {
   sync();
-  run('prettier', ['--write', ...(rest.length ? rest : ['src/modules/manager-backup'])]);
+  run('prettier', ['--write', ...(rest.length ? rest : ['src/modules/manager-backup', 'scripts/manager-backup.ts', 'scripts/tsconfig.manager-backup.json'])]);
   pull();
 } else if (command === 'check') {
   sync();
   const targets = rest.length ? rest : ['src/modules/manager-backup'];
   const failures = [
     run('tsc', ['--noEmit']),
+    ...(existsSync(join(testbed, 'scripts', 'tsconfig.manager-backup.json')) ? [run('tsc', ['-p', 'scripts/tsconfig.manager-backup.json'])] : []),
     run('eslint', targets),
-    run('prettier', ['--check', ...targets]),
+    run('prettier', ['--check', ...targets, ...(existsSync(join(testbed, 'scripts', 'manager-backup.ts')) ? ['scripts/manager-backup.ts'] : [])]),
     run('vitest', ['run', ...targets]),
   ].filter((status) => status !== 0);
   process.exit(failures.length ? 1 : 0);
