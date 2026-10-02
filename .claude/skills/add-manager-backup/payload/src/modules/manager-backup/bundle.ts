@@ -358,11 +358,16 @@ export function openBundleStream(file: string, key: Buffer): Readable {
 export const BUNDLE_POLICY: MemberPolicy = {
   topLevel: TOP_LEVEL,
   allowSymlink: (member, target) => {
-    // Container skill links point at /app/skills/..., dangling on the host by design.
-    if (target.startsWith('/app/') && !target.includes('..') && !target.includes('\0')) return true;
-    if (target.startsWith('/') || target === '') return false;
-    const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(member), target));
+    if (target === '' || target.includes('\0')) return false;
     const top = member.split('/')[0];
+    // Agent workspaces hold things like Python virtual environments whose links point outside the
+    // tree (an interpreter in /usr/bin). They are recreated verbatim and never followed while
+    // restoring: the extractor refuses to write through any link, so a target cannot redirect a write.
+    if (top === 'groups' || top === 'store') return true;
+    // Container skill links point at /app/skills/..., dangling on the host by design.
+    if (target.startsWith('/app/') && !target.includes('..')) return true;
+    if (target.startsWith('/')) return false;
+    const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(member), target));
     return resolved === top || resolved.startsWith(`${top}/`);
   },
 };

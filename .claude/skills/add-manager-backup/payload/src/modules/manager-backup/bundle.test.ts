@@ -218,6 +218,26 @@ describe('createBundle', () => {
   });
 });
 
+describe('workspace links', () => {
+  it('keeps links that point outside the tree (a virtual environment) through backup, verify and restore, but not in data/', async () => {
+    fs.mkdirSync(path.join(project, 'groups', 'g1', 'venv', 'bin'), { recursive: true });
+    fs.symlinkSync('/usr/bin/python3', path.join(project, 'groups', 'g1', 'venv', 'bin', 'python'));
+    fs.symlinkSync('../../shared', path.join(project, 'groups', 'g1', 'shared-link'));
+    const { destFile, key } = await makeBundle();
+    await verifyBundle(destFile, key);
+    const out = await extractAll(destFile, key);
+    expect(fs.readlinkSync(path.join(out, 'groups', 'g1', 'venv', 'bin', 'python'))).toBe('/usr/bin/python3');
+    expect(fs.readlinkSync(path.join(out, 'groups', 'g1', 'shared-link'))).toBe('../../shared');
+  });
+
+  it('still refuses an escaping link inside data/', () => {
+    expect(BUNDLE_POLICY.allowSymlink!('data/v2-sessions/g/link', '/etc/passwd')).toBe(false);
+    expect(BUNDLE_POLICY.allowSymlink!('data/v2-sessions/g/link', '../../../outside')).toBe(false);
+    expect(BUNDLE_POLICY.allowSymlink!('data/v2-sessions/g/skills/x', '/app/skills/x')).toBe(true);
+    expect(BUNDLE_POLICY.allowSymlink!('groups/g/venv/python', '/usr/bin/python3')).toBe(true);
+  });
+});
+
 describe('verifyBundle', () => {
   it('accepts an intact bundle and reports its size', async () => {
     const { destFile, key, manifest } = await makeBundle();
