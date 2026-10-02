@@ -27,7 +27,7 @@ and [`docs/spikes.md`](docs/spikes.md) for the technical findings so far.
 ## Development
 
 ```sh
-node --test scripts/                        # unit tests of the repo tooling
+node --test "scripts/*.test.mjs"                        # unit tests of the repo tooling
 node scripts/privacy-scan.mjs --all         # privacy gate over tracked files
 git config core.hooksPath .githooks         # enable the pre-commit gate
 ```
