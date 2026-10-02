@@ -38,6 +38,8 @@ import {
 
 export const BUNDLE_SCHEMA = 'manager-backup/v1';
 export const TOOL_VERSION = '0.1.0';
+/** Scratch directory a restore keeps inside each root it replaces; never archived. */
+export const TXN_DIR = '.manager-backup-txn';
 export const TOP_LEVEL = new Set(['manifest.json', 'db', 'data', 'groups', 'store', 'env', 'config']);
 const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 
@@ -103,11 +105,16 @@ const SESSION_DB = /^v2-sessions\/[^/]+\/[^/]+\/(?:inbound|outbound)\.db$/;
 const SESSION_DB_SIDECAR = /^v2-sessions\/[^/]+\/[^/]+\/(?:inbound|outbound)\.db-(?:journal|wal|shm)$/;
 const TOP_LEVEL_EXCLUDES = new Set(['v2.db', 'v2.db-wal', 'v2.db-shm', 'v2.db-journal', 'circuit-breaker.json']);
 
+function includeOutsideTxn(rel: string): boolean {
+  return rel.split('/')[0] !== TXN_DIR;
+}
+
 /** True when a path under `data/` belongs in the bundle. */
 export function includeInData(rel: string, stat: fs.Stats): boolean {
   if (stat.isSocket() || stat.isFIFO()) return false;
   const segments = rel.split('/');
   const name = segments[segments.length - 1];
+  if (segments[0] === TXN_DIR) return false;
   if (segments.length === 1 && (TOP_LEVEL_EXCLUDES.has(name) || name.startsWith('Dockerfile.'))) return false;
   if (name === '.heartbeat' || name.endsWith('.lock') || name.endsWith('.sock')) return false;
   if (segments.includes('.context')) return false; // rewritten at every spawn
@@ -238,8 +245,8 @@ export async function createBundle(options: CreateBundleOptions): Promise<Bundle
       [string, string, ((rel: string, stat: fs.Stats) => boolean) | undefined, typeof substitute | undefined]
     > = [
       ['data', host.dataDir, includeInData, substitute],
-      ['groups', host.groupsDir, undefined, undefined],
-      ['store', host.storeDir, undefined, undefined],
+      ['groups', host.groupsDir, includeOutsideTxn, undefined],
+      ['store', host.storeDir, includeOutsideTxn, undefined],
     ];
     for (const [prefix, dir, include, sub] of roots) {
       const real = await realDir(dir);

@@ -42,6 +42,8 @@ export interface BackupHost {
   identity(): CodeIdentity;
   installSlug(): string;
   installed(): InstalledInventory;
+  /** Names of every migration the running code knows about (core and modules). */
+  registeredMigrations(): string[];
   describeDb(): Promise<DbDescription>;
   /** Write a consistent point-in-time copy of the central database to `dest`. */
   snapshotCentralDb(dest: string): Promise<void>;

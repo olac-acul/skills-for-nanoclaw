@@ -568,6 +568,11 @@ export class MemberChecker {
 
 export interface ExtractOptions {
   policy: MemberPolicy;
+  /**
+   * Send a top-level member to its own directory instead of `<destRoot>/<member>`.
+   * The directory is created if missing. Used to stage each root on its own filesystem.
+   */
+  roots?: Record<string, string>;
   /** Apply owners from the archive. Needs root; otherwise ownership is left to the caller. */
   preserveOwner?: boolean;
   /** Called for every extracted entry (progress, auditing). */
@@ -616,13 +621,23 @@ export async function extractTar(
   const applyOwner = options.preserveOwner === true && typeof process.getuid === 'function' && process.getuid() === 0;
   const result: ExtractResult = { entries: 0, files: 0, bytes: 0, ownersApplied: applyOwner };
   const deferredDirs: TarEntryMeta[] = [];
+  const targetOf = (memberPath: string): string => {
+    const [first, ...others] = memberPath.split('/');
+    const mapped = options.roots?.[first];
+    return mapped ? path.join(mapped, ...others) : path.join(destRoot, ...memberPath.split('/'));
+  };
 
   for await (const entry of readTar(source)) {
     const { meta } = entry;
     checker.check(meta);
-    await assertRealDirectoryChain(destRoot, meta.path);
-    const target = path.join(destRoot, ...meta.path.split('/'));
-    if (meta.path.includes('/')) {
+    const [top, ...rest] = meta.path.split('/');
+    const mappedRoot = options.roots?.[top];
+    const chainRoot = mappedRoot ?? destRoot;
+    const chainPath = mappedRoot ? rest.join('/') : meta.path;
+    if (mappedRoot) await fs.promises.mkdir(mappedRoot, { recursive: true, mode: 0o700 });
+    if (chainPath) await assertRealDirectoryChain(chainRoot, chainPath);
+    const target = targetOf(meta.path);
+    if (mappedRoot ? rest.length > 0 : meta.path.includes('/')) {
       // The packer always writes ancestors first; a missing parent means a damaged or hostile archive.
       const parent = await fs.promises.lstat(path.dirname(target)).catch(() => null);
       if (!parent?.isDirectory())
@@ -654,7 +669,7 @@ export async function extractTar(
       await fs.promises.symlink(meta.linkpath ?? '', target);
       if (applyOwner) await fs.promises.lchown(target, meta.uid, meta.gid);
     } else {
-      await fs.promises.link(path.join(destRoot, ...(meta.linkpath ?? '').split('/')), target);
+      await fs.promises.link(targetOf(meta.linkpath ?? ''), target);
     }
     result.entries++;
     options.onEntry?.(meta);
@@ -663,7 +678,7 @@ export async function extractTar(
   // Directory modes, owners and times last, deepest first, so restrictive modes
   // cannot block extraction of their own contents.
   for (const meta of deferredDirs.sort((a, b) => b.path.length - a.path.length)) {
-    const target = path.join(destRoot, ...meta.path.split('/'));
+    const target = targetOf(meta.path);
     await fs.promises.chmod(target, sanitizeMode(meta.mode, 'dir'));
     if (applyOwner) await fs.promises.chown(target, meta.uid, meta.gid);
     await fs.promises.utimes(target, meta.mtime, meta.mtime);

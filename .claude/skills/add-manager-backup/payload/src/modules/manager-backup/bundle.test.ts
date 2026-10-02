@@ -51,6 +51,7 @@ function makeHost(overrides: Partial<BackupHost> = {}): BackupHost {
       gateway: 'onecli',
       driver: 'docker',
     }),
+    registeredMigrations: () => ['one', 'two'],
     describeDb: async () => {
       const db = new Database(path.join(dataDir, 'v2.db'), { readonly: true });
       try {
