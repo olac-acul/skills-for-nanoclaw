@@ -227,6 +227,33 @@ describe('member validation', () => {
   });
 });
 
+describe('archives from other writers', () => {
+  it('accepts a directory name that ends with a slash, as ustar writers commonly emit', async () => {
+    const header = encodeEntryHeader(meta({ path: 'state', type: 'dir', mode: 0o755 }));
+    header.fill(0, 0, 100);
+    header.write('state/', 0, 'ascii');
+    resetChecksum(header);
+    const entries: TarEntryMeta[] = [];
+    for await (const entry of readTar(chunked(Buffer.concat([header, Buffer.alloc(1024)]), 512)))
+      entries.push(entry.meta);
+    expect(entries.map((entry) => entry.path)).toEqual(['state']);
+  });
+
+  it('still rejects a path made only of slashes or with an empty segment', async () => {
+    for (const bad of ['/', 'state//x/']) {
+      const header = encodeEntryHeader(meta({ path: 'state', type: 'dir', mode: 0o755 }));
+      header.fill(0, 0, 100);
+      header.write(bad, 0, 'ascii');
+      resetChecksum(header);
+      const dest = path.join(tmp, `d${bad.length}`);
+      fs.mkdirSync(dest);
+      await expect(
+        extractTar(chunked(Buffer.concat([header, Buffer.alloc(1024)]), 512), dest, { policy }),
+      ).rejects.toBeInstanceOf(TarError);
+    }
+  });
+});
+
 describe('reader strictness', () => {
   async function rawEntries(buf: Buffer): Promise<TarEntryMeta[]> {
     const out: TarEntryMeta[] = [];

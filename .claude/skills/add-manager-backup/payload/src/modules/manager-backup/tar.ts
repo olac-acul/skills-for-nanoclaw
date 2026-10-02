@@ -451,7 +451,9 @@ export async function* readTar(source: AsyncIterable<Buffer>): AsyncGenerator<Ta
     pending = null;
     const prefix = readString(header, 345, 155);
     const inlineName = readString(header, 0, 100);
-    const entryPath = pax.get('path') ?? (prefix ? `${prefix}/${inlineName}` : inlineName);
+    const rawPath = pax.get('path') ?? (prefix ? `${prefix}/${inlineName}` : inlineName);
+    // Other tar writers (Python's tarfile among them) end directory names with a slash.
+    const entryPath = type === 'dir' ? rawPath.replace(/\/$/, '') : rawPath;
     const linkpath = pax.get('linkpath') ?? readString(header, 157, 100);
     const meta: TarEntryMeta = {
       path: entryPath,
