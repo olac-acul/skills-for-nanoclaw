@@ -19,7 +19,9 @@ import { createBundle, verifyBundle } from './bundle.js';
 import { generateKey } from './crypto.js';
 import type { BackupHost } from './host.js';
 import { restoreBundle } from './restore.js';
-import { createUpstreamHost, readInventory } from './upstream-host.js';
+import Database from 'better-sqlite3';
+
+import { countBusySessions, createUpstreamHost, readInventory } from './upstream-host.js';
 
 let tmp: string;
 let db: DbDriver;
@@ -134,5 +136,35 @@ describe('against the real upstream schema', () => {
     expect(inventory.modules).toEqual(expect.arrayContaining(['approvals']));
     expect(inventory.channels).not.toContain('cli');
     expect(inventory.driver).toBeTruthy();
+  });
+});
+
+describe('countBusySessions', () => {
+  function mailbox(root: string, group: string, session: string, statuses: string[]): void {
+    const dir = path.join(root, 'v2-sessions', group, session);
+    fs.mkdirSync(dir, { recursive: true });
+    const db = new Database(path.join(dir, 'outbound.db'));
+    db.exec('CREATE TABLE processing_ack (message_id TEXT PRIMARY KEY, status TEXT NOT NULL, status_changed TEXT)');
+    statuses.forEach((status, index) =>
+      db.prepare('INSERT INTO processing_ack VALUES (?, ?, ?)').run(`m${index}`, status, 't'),
+    );
+    db.close();
+  }
+
+  it('counts only sessions with a message being worked on', () => {
+    const root = path.join(tmp, 'busy');
+    mailbox(root, 'g1', 's1', ['completed', 'completed']); // idle container waiting for work
+    mailbox(root, 'g1', 's2', ['completed', 'processing']); // mid-turn
+    mailbox(root, 'g2', 's3', ['processing', 'processing']); // mid-turn (counted once)
+    mailbox(root, 'g2', 's4', []);
+    expect(countBusySessions(root)).toBe(2);
+  });
+
+  it('is zero without sessions and treats an unreadable mailbox as busy', () => {
+    expect(countBusySessions(path.join(tmp, 'none'))).toBe(0);
+    const root = path.join(tmp, 'broken');
+    fs.mkdirSync(path.join(root, 'v2-sessions', 'g', 's'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'v2-sessions', 'g', 's', 'outbound.db'), 'not a database');
+    expect(countBusySessions(root)).toBe(1);
   });
 });

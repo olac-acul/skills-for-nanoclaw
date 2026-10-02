@@ -20,6 +20,7 @@ export const MANAGED_ENV_KEYS = [
   'OPENCODE_SMALL_MODEL',
   'OPENCODE_AUTH_MODE',
   'OPENCODE_MODEL_CONTEXT_LIMIT',
+  'OPENCODE_MODEL_OUTPUT_LIMIT',
 ] as const;
 
 export const JOURNAL_NAME = 'model-journal.json';
@@ -132,6 +133,15 @@ export interface ApplyOutcome {
   restartFailures: string[];
 }
 
+/**
+ * OpenCode's model schema wants an output limit whenever a context limit is
+ * given. Half the window, at most 4096 tokens, is a safe default for a model
+ * whose real output limit the endpoint does not report.
+ */
+export function outputLimitFor(contextLimit: number): number {
+  return Math.min(4096, Math.max(256, Math.floor(contextLimit / 2)));
+}
+
 function targetEnv(
   settings: { baseUrl: string; model: string; smallModel: string },
   probe: ProbeResult,
@@ -142,7 +152,9 @@ function targetEnv(
     OPENCODE_MODEL: `openai/${settings.model}`,
     OPENCODE_SMALL_MODEL: `openai/${settings.smallModel}`,
     OPENCODE_AUTH_MODE: null, // API-key (or keyless) mode; clears a leftover ChatGPT sign-in mode
+    // Both limits or neither: a context limit alone makes OpenCode reject the model definition.
     OPENCODE_MODEL_CONTEXT_LIMIT: probe.contextLimit ? String(probe.contextLimit) : null,
+    OPENCODE_MODEL_OUTPUT_LIMIT: probe.contextLimit ? String(outputLimitFor(probe.contextLimit)) : null,
   };
 }
 

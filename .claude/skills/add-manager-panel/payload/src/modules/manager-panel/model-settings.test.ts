@@ -4,6 +4,7 @@ import type { ProbeResult } from './model-endpoint.js';
 import {
   ModelSettingsError,
   applyModelChange,
+  outputLimitFor,
   previewModelChange,
   readModelStatus,
   recoverModelChange,
@@ -111,6 +112,7 @@ describe('applyModelChange', () => {
       OPENCODE_MODEL: 'openai/qwen3-coder',
       OPENCODE_SMALL_MODEL: 'openai/tiny',
       OPENCODE_MODEL_CONTEXT_LIMIT: '32768',
+      OPENCODE_MODEL_OUTPUT_LIMIT: '4096', // OpenCode rejects a context limit without an output limit
     });
     expect(ports.env.OPENCODE_AUTH_MODE).toBeUndefined();
     expect(ports.groups.every((group) => group.provider === 'opencode' && group.model === 'openai/qwen3-coder')).toBe(
@@ -194,6 +196,23 @@ describe('recoverModelChange', () => {
     expect(ports.groups).toEqual(original);
     expect(ports.journal).toBeNull();
     expect(await recoverModelChange(ports)).toBe('none');
+  });
+});
+
+describe('output limit', () => {
+  it('is half the window, between 256 and 4096', () => {
+    expect(outputLimitFor(32768)).toBe(4096);
+    expect(outputLimitFor(4096)).toBe(2048);
+    expect(outputLimitFor(300)).toBe(256);
+  });
+
+  it('is written and removed together with the context limit', async () => {
+    await applyModelChange(ports, input);
+    expect(ports.env.OPENCODE_MODEL_OUTPUT_LIMIT).toBe('4096');
+    ports.probeResult = { ...GOOD, contextLimit: null };
+    await applyModelChange(ports, input);
+    expect(ports.env.OPENCODE_MODEL_CONTEXT_LIMIT).toBeUndefined();
+    expect(ports.env.OPENCODE_MODEL_OUTPUT_LIMIT).toBeUndefined();
   });
 });
 

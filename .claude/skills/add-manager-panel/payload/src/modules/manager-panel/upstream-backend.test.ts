@@ -99,7 +99,7 @@ beforeEach(async () => {
     .catch(() => undefined);
 
   const host = {
-    ...createUpstreamHost({ db, projectRoot: process.cwd(), activeContainerCount: () => 0 }),
+    ...createUpstreamHost({ db, projectRoot: process.cwd(), busyAgentCount: () => 0 }),
     projectRoot: project,
     dataDir: path.join(project, 'data'),
     groupsDir: path.join(project, 'groups'),

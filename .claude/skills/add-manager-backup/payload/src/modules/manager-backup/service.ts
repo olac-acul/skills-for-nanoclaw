@@ -86,7 +86,7 @@ export class BackupService {
   /** Create a backup. Resolves with the record and the key, which is not stored anywhere. */
   async create(options: CreateOptions = {}): Promise<{ record: BackupRecord; key: string }> {
     const { host } = this.options;
-    const counter = host.activeContainerCount;
+    const counter = host.busyAgentCount;
     let before = 0;
     if (counter) {
       const deadline = Date.now() + (options.waitMs ?? 0);

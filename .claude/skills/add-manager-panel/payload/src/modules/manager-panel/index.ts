@@ -9,7 +9,6 @@ import fs from 'node:fs';
 import type http from 'node:http';
 import path from 'node:path';
 
-import { getActiveContainerCount } from '../../container-runner.js';
 import { DATA_DIR } from '../../config.js';
 import { getDb } from '../../db/connection.js';
 import { readEnvFile } from '../../env.js';
@@ -17,7 +16,7 @@ import { onHostShutdown, onHostStart } from '../../host-lifecycle.js';
 import { getInstallSlug } from '../../install-slug.js';
 import { log } from '../../log.js';
 import { BackupService } from '../manager-backup/service.js';
-import { createUpstreamHost } from '../manager-backup/upstream-host.js';
+import { countBusySessions, createUpstreamHost } from '../manager-backup/upstream-host.js';
 import { PANEL_ENV_KEYS, isLoopbackBind, parsePanelConfig } from './config.js';
 import { recoverModelChange } from './model-settings.js';
 import { createPanelServer } from './server.js';
@@ -38,7 +37,7 @@ export async function startManagerPanel(): Promise<void> {
     }
 
     const state = new PanelState(path.join(DATA_DIR, 'manager-panel'));
-    const host = createUpstreamHost({ db: getDb(), activeContainerCount: getActiveContainerCount, projectRoot });
+    const host = createUpstreamHost({ db: getDb(), busyAgentCount: () => countBusySessions(DATA_DIR), projectRoot });
     const backups = new BackupService({ host, backupsDir: config.backupDir });
     const backend = createUpstreamBackend({ projectRoot, state, backups });
 

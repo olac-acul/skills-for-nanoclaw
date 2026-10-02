@@ -45,8 +45,11 @@ export interface BackupHost {
   /** Names of every migration the running code knows about (core and modules). */
   registeredMigrations(): string[];
   describeDb(): Promise<DbDescription>;
-  /** Running agent containers; undefined when not running inside the host process. */
-  activeContainerCount?: () => number;
+  /**
+   * Agents in the middle of a turn right now (not merely containers that are alive and idle);
+   * undefined when not running inside the host process.
+   */
+  busyAgentCount?: () => number;
   /** Write a consistent point-in-time copy of the central database to `dest`. */
   snapshotCentralDb(dest: string): Promise<void>;
 }

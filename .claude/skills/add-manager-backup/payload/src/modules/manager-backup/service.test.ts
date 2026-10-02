@@ -14,7 +14,7 @@ let install: SyntheticInstall;
 
 function service(counter?: () => number, extra: { sleep?: (ms: number) => Promise<void> } = {}): BackupService {
   return new BackupService({
-    host: { ...install.host, activeContainerCount: counter },
+    host: { ...install.host, busyAgentCount: counter },
     backupsDir: path.join(tmp, 'backups'),
     sleep: extra.sleep ?? (async () => undefined),
     pollMs: 1,

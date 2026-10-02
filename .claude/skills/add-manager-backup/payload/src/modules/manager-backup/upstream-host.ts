@@ -9,6 +9,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import Database from 'better-sqlite3';
+
 import { DATA_DIR, GROUPS_DIR, STORE_DIR } from '../../config.js';
 import type { DbDriver } from '../../db/driver.js';
 import { getRegisteredMigrations } from '../../db/migrations/index.js';
@@ -46,10 +48,45 @@ export function readInventory(projectRoot: string): InstalledInventory {
   };
 }
 
+/**
+ * Sessions whose agent is working on a message right now: the container has
+ * claimed a message (`processing_ack.status = 'processing'`) and not finished
+ * it. A container that is alive and waiting for the next message does not
+ * count, which is what lets a backup run while agents sit idle.
+ */
+export function countBusySessions(dataDir: string): number {
+  const sessionsDir = path.join(dataDir, 'v2-sessions');
+  if (!fs.existsSync(sessionsDir)) return 0;
+  let busy = 0;
+  for (const group of fs.readdirSync(sessionsDir)) {
+    const groupDir = path.join(sessionsDir, group);
+    if (!fs.statSync(groupDir).isDirectory()) continue;
+    for (const session of fs.readdirSync(groupDir)) {
+      const outbound = path.join(groupDir, session, 'outbound.db');
+      if (!fs.existsSync(outbound)) continue;
+      const db = new Database(outbound, { readonly: true });
+      try {
+        db.pragma('busy_timeout = 2000');
+        const row = db.prepare("SELECT COUNT(*) AS c FROM processing_ack WHERE status = 'processing'").get() as {
+          c: number;
+        };
+        if (row.c > 0) busy++;
+        // eslint-disable-next-line no-catch-all/no-catch-all -- an unreadable mailbox must count as busy, whatever the cause
+      } catch {
+        // An unreadable or older-format mailbox is treated as busy: better to wait than to copy mid-write.
+        busy++;
+      } finally {
+        db.close();
+      }
+    }
+  }
+  return busy;
+}
+
 export interface UpstreamHostOptions {
   db: DbDriver;
-  /** Count of running agent containers; only available inside the host process. */
-  activeContainerCount?: () => number;
+  /** Count of agents mid-turn; only meaningful inside the host process. */
+  busyAgentCount?: () => number;
   projectRoot?: string;
 }
 
@@ -69,7 +106,7 @@ export function createUpstreamHost(options: UpstreamHostOptions): BackupHost {
     installSlug: () => getInstallSlug(projectRoot),
     installed: () => readInventory(projectRoot),
     registeredMigrations: () => getRegisteredMigrations().map((migration) => migration.name),
-    activeContainerCount: options.activeContainerCount,
+    busyAgentCount: options.busyAgentCount,
     async describeDb(): Promise<DbDescription> {
       const rows = await db.all<{ name: string }>('SELECT name FROM schema_version ORDER BY name');
       const counts: Record<string, number> = {};

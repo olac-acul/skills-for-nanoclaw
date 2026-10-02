@@ -87,7 +87,7 @@ gateway availability monitor can reopen admission on its own. There is no
 message interceptor.
 
 Decision: a hot backup does not close admission. It waits (up to a configurable
-timeout) until `getActiveContainerCount()` is zero, then snapshots. Every
+timeout) until `the busy-agent count is zero, then snapshots. Every
 database file is copied with SQLite's own copy, so each file is consistent on
 its own; what a running agent can still skew is the relative timing of
 different files. The result is recorded in the manifest:

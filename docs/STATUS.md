@@ -46,11 +46,14 @@ Docker Compose stack of our own and no channels preconfigured:
       110 tests including an end-to-end run on a migrated upstream database; both skills
       apply to upstream `main` on GitHub Actions with Node 22.
 
+- [x] Real-install test on a clean Docker host (see `real-install-test.md`): skills apply, host runs
+      with the panel, model switch, agent answers through an OpenAI-compatible endpoint, hot backup
+      and terminal restore verified. Found and fixed two bugs.
+
 ## Next
 
-- [ ] Spikes needing Docker (OneCLI install, bind address, HTTP model endpoint,
-      real container drain). Needs a clean Docker host; the existing test LXC runs
-      another stack on the ports OneCLI needs.
+- [ ] Restore onto a second machine (rehearsal mode on real data), a real channel, and a
+      reproduction of the restart-after-adoption failure.
 - [ ] Look at the panel UI in a real browser (the Chrome extension was not connected
       in the last session; `spikes/panel-dev.ts` in the test bed serves the real
       panel with fake data on 127.0.0.1:3299). Only static checks cover the UI script so far.
