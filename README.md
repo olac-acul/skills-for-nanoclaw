@@ -19,6 +19,10 @@ Both are designed to attach to upstream through its existing extension points
 (module and `ncl` command barrels, host lifecycle hooks) without editing
 upstream source.
 
+## Guide
+
+The full guide is [`docs/guide.md`](docs/guide.md): installing, first run, reaching the panel over the network and HTTPS, models, backups and restores, everything that is terminal-only, troubleshooting and reference. The panel serves the same text at `/guide`.
+
 ## Status
 
 Early development. See [`docs/STATUS.md`](docs/STATUS.md) for the current state

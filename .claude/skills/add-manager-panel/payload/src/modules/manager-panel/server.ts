@@ -36,6 +36,7 @@ import {
 import type { ScryptParams } from './password.js';
 import type { Session } from './sessions.js';
 import type { PanelState } from './state.js';
+import { GUIDE_HTML } from './guide-html.js';
 import { APP_CSS, APP_JS, INDEX_HTML, UI_CSP } from './ui.js';
 
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -250,6 +251,8 @@ export function createPanelServer(config: PanelServerConfig): http.Server {
         if (request.method === 'GET' && !url.pathname.startsWith('/api/')) {
           if (url.pathname === '/' || url.pathname === '/index.html')
             sendStatic(response, 'text/html; charset=utf-8', INDEX_HTML);
+          else if (url.pathname === '/guide' || url.pathname === '/guide/')
+            sendStatic(response, 'text/html; charset=utf-8', GUIDE_HTML);
           else if (url.pathname === '/app.js') sendStatic(response, 'text/javascript; charset=utf-8', APP_JS);
           else if (url.pathname === '/app.css') sendStatic(response, 'text/css; charset=utf-8', APP_CSS);
           else throw new HttpError(404, 'not_found');

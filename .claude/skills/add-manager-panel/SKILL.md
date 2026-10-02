@@ -14,6 +14,8 @@ the local network.
 - **Model:** point every agent at one OpenAI-compatible endpoint (a local server such as llama.cpp or vLLM, or a hosted provider). The endpoint is checked first (`/models`, the model is listed, a one-token completion). The change writes the `OPENCODE_*` settings in `.env` and each group's provider and model, restarts the groups, and keeps a journal so a failure, or a crash in the middle, puts everything back.
 - **Backups:** create (waits for running agents to finish), verify with the key, download, delete. Each backup has its own key, shown once. Restoring is done from the terminal (see `add-manager-backup`).
 
+The panel serves a detailed guide at `/guide` (the source is `docs/guide.md` in this repository); every place where the panel hands you over to a terminal links to the matching section.
+
 It adds no dependency and changes no existing code except one import line in
 `src/modules/index.ts`. A panel that cannot start (port in use, bad
 certificate, bad setting) logs why; NanoClaw keeps running.
@@ -41,6 +43,7 @@ payload/src/modules/manager-panel/config.ts -> src/modules/manager-panel/config.
 payload/src/modules/manager-panel/env-file.test.ts -> src/modules/manager-panel/env-file.test.ts
 payload/src/modules/manager-panel/env-file.ts -> src/modules/manager-panel/env-file.ts
 payload/src/modules/manager-panel/fixtures/fake-backend.ts -> src/modules/manager-panel/fixtures/fake-backend.ts
+payload/src/modules/manager-panel/guide-html.ts -> src/modules/manager-panel/guide-html.ts
 payload/src/modules/manager-panel/index.ts -> src/modules/manager-panel/index.ts
 payload/src/modules/manager-panel/model-endpoint.test.ts -> src/modules/manager-panel/model-endpoint.test.ts
 payload/src/modules/manager-panel/model-endpoint.ts -> src/modules/manager-panel/model-endpoint.ts

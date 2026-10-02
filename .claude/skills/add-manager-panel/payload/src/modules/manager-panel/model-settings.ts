@@ -113,18 +113,35 @@ export async function readModelStatus(ports: ModelPorts): Promise<ModelStatus> {
   };
 }
 
+/** Whether the small model is on the endpoint's list; `unchecked` when the list is too long to be complete. */
+export type SmallModelCheck = 'same' | 'listed' | 'not_found' | 'unchecked';
+
+const LIST_CAP = 200; // probeEndpoint keeps at most this many ids
+
+export function checkSmallModel(probe: ProbeResult, model: string, smallModel: string): SmallModelCheck {
+  if (smallModel === model) return 'same';
+  if (probe.models.includes(smallModel)) return 'listed';
+  return probe.models.length >= LIST_CAP ? 'unchecked' : 'not_found';
+}
+
 export interface Preview {
   probe: ProbeResult;
+  smallModel: SmallModelCheck;
   groupsAffected: number;
   restartsNeeded: number;
 }
 
 /** Check the endpoint and say what applying would touch. Changes nothing. */
 export async function previewModelChange(ports: ModelPorts, input: ModelInput): Promise<Preview> {
-  const { baseUrl, model } = normalise(input);
+  const { baseUrl, model, smallModel } = normalise(input);
   const probe = await ports.probe(baseUrl, model);
   const groups = await ports.listGroups();
-  return { probe, groupsAffected: groups.length, restartsNeeded: groups.length };
+  return {
+    probe,
+    smallModel: probe.reason ? 'unchecked' : checkSmallModel(probe, model, smallModel),
+    groupsAffected: groups.length,
+    restartsNeeded: groups.length,
+  };
 }
 
 export interface ApplyOutcome {
@@ -165,6 +182,9 @@ export async function applyModelChange(ports: ModelPorts, input: ModelInput): Pr
   }
   const probe = await ports.probe(settings.baseUrl, settings.model);
   if (probe.reason) throw new ModelSettingsError('probe_failed', 'the endpoint did not pass its checks', probe.reason);
+  if (checkSmallModel(probe, settings.model, settings.smallModel) === 'not_found') {
+    throw new ModelSettingsError('probe_failed', 'the small model is not on the endpoint', 'small_model_not_found');
+  }
 
   const groups = await ports.listGroups();
   const journal: Journal = {

@@ -104,6 +104,7 @@ describe('previewModelChange', () => {
 
 describe('applyModelChange', () => {
   it('points every group and the install defaults at the endpoint, restarts them and clears the journal', async () => {
+    ports.probeResult = { ...GOOD, models: ['qwen3-coder', 'tiny'] };
     const outcome = await applyModelChange(ports, { ...input, smallModel: 'tiny' });
     expect(outcome).toEqual({ groups: 2, restarted: 2, restartFailures: [] });
     expect(ports.env).toMatchObject({
@@ -196,6 +197,35 @@ describe('recoverModelChange', () => {
     expect(ports.groups).toEqual(original);
     expect(ports.journal).toBeNull();
     expect(await recoverModelChange(ports)).toBe('none');
+  });
+});
+
+describe('small model', () => {
+  const small = { ...input, smallModel: 'tiny' };
+
+  it('is checked against the endpoint list in the preview and refused on apply when missing', async () => {
+    ports.probeResult = { ...GOOD, models: ['qwen3-coder', 'other'] };
+    expect((await previewModelChange(ports, small)).smallModel).toBe('not_found');
+    await expect(applyModelChange(ports, small)).rejects.toMatchObject({
+      code: 'probe_failed',
+      detail: 'small_model_not_found',
+    });
+    expect(ports.journal).toBeNull();
+    expect(ports.env.OPENCODE_PROVIDER).toBe('openrouter');
+  });
+
+  it('passes when listed, when equal to the main model, or when none is given', async () => {
+    ports.probeResult = { ...GOOD, models: ['qwen3-coder', 'tiny'] };
+    expect((await previewModelChange(ports, small)).smallModel).toBe('listed');
+    expect((await previewModelChange(ports, { ...input, smallModel: 'qwen3-coder' })).smallModel).toBe('same');
+    expect((await previewModelChange(ports, input)).smallModel).toBe('same');
+    await expect(applyModelChange(ports, small)).resolves.toMatchObject({ groups: 2 });
+    expect(ports.env.OPENCODE_SMALL_MODEL).toBe('openai/tiny');
+  });
+
+  it('is not judged when the endpoint list may be truncated', async () => {
+    ports.probeResult = { ...GOOD, models: Array.from({ length: 200 }, (_, index) => `m${index}`) };
+    expect((await previewModelChange(ports, small)).smallModel).toBe('unchecked');
   });
 });
 

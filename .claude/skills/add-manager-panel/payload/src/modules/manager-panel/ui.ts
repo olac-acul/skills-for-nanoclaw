@@ -27,6 +27,7 @@ export const INDEX_HTML = `<!doctype html>
     <header id="top" hidden>
       <strong>NanoClaw Manager</strong>
       <nav id="nav"></nav>
+      <a id="guide-link" class="help" href="/guide" target="_blank" rel="noopener">Guide</a>
       <button id="logout" type="button" class="link"></button>
     </header>
     <main id="main"><p class="muted">Loading…</p></main>
@@ -91,6 +92,38 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 .auth-card input { width: 100%; padding: 10px 12px; }
 .auth-card button.primary { width: 100%; padding: 10px 14px; margin-top: 4px; }
 .auth-card .hint { font-size: 13px; color: var(--muted); }
+
+a.help { color: var(--accent); text-decoration: none; font-size: 13px; }
+a.help:hover { text-decoration: underline; }
+.links { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 8px 0 0; }
+header a.help { margin-left: auto; }
+#banner a { color: inherit; text-decoration: underline; margin-left: 6px; }
+/* the guide page */
+.guide-top { display: flex; gap: 12px; align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
+.guide-top .back { margin-left: auto; color: var(--accent); text-decoration: none; }
+.guide-wrap { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 32px; max-width: 1120px; margin: 0 auto; padding: 24px 16px 80px; }
+.guide-toc { position: sticky; top: 64px; align-self: start; max-height: calc(100vh - 84px); overflow: auto; display: grid; gap: 2px; font-size: 14px; }
+.guide-toc a { color: var(--muted); text-decoration: none; padding: 3px 8px; border-radius: 6px; }
+.guide-toc a:hover { background: var(--panel); color: var(--text); }
+.guide-toc a.toc-3 { padding-left: 22px; font-size: 13px; }
+.guide { min-width: 0; max-width: 780px; }
+.guide h1 { font-size: 28px; margin: 0 0 12px; }
+.guide h2 { font-size: 21px; margin: 40px 0 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.guide h3 { font-size: 16px; margin: 26px 0 8px; }
+.guide :is(h1, h2, h3, h4) { scroll-margin-top: 72px; }
+.guide .anchor { margin-left: 8px; color: var(--muted); text-decoration: none; opacity: 0; }
+.guide :is(h1, h2, h3, h4):hover .anchor, .guide .anchor:focus { opacity: 1; }
+.guide a { color: var(--accent); }
+.guide p, .guide li { line-height: 1.65; }
+.guide code { background: var(--panel); border: 1px solid var(--line); padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+.guide pre { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow: auto; }
+.guide pre code { background: none; border: 0; padding: 0; font-size: 13px; }
+.guide blockquote { margin: 16px 0; padding: 4px 16px; border-left: 3px solid var(--accent); background: var(--panel); border-radius: 0 8px 8px 0; }
+.guide .table-wrap { overflow-x: auto; margin: 14px 0; }
+.guide table { border: 1px solid var(--line); border-radius: 8px; }
+.guide th, .guide td { border-bottom: 1px solid var(--line); vertical-align: top; }
+.guide hr { border: 0; border-top: 1px solid var(--line); margin: 28px 0; }
+@media (max-width: 820px) { .guide-wrap { grid-template-columns: 1fr; } .guide-toc { position: static; max-height: none; } }
 code, .key { font-family: ui-monospace, monospace; word-break: break-all; }
 .key { display: block; padding: 10px; background: var(--bg); border: 1px dashed var(--line); border-radius: 6px; margin: 8px 0; user-select: all; }
 `;
@@ -100,17 +133,26 @@ export const APP_JS = `
 var T = {
   nav: { overview: 'Overview', agents: 'Agents', model: 'Model', backups: 'Backups' },
   logout: 'Sign out',
+  guide: { link: 'Guide', insecureMore: 'How to enable HTTPS' },
+  terminal: {
+    title: 'Things you do from a terminal', intro: 'The panel keeps these out of the browser on purpose. Each link opens the matching section of the guide.',
+    items: [
+      ['restoring-a-backup', 'Restore a backup'], ['forgotten-password', 'Forgotten password'], ['api-keys', 'Store an API key'],
+      ['channels-and-agents', 'Add channels and agents'], ['https-and-network-access', 'HTTPS and network access'], ['updating-nanoclaw', 'Update NanoClaw'],
+      ['rebuilding-agent-images', 'Rebuild agent images'], ['terminal-only-tasks', 'All terminal-only tasks'],
+    ],
+  },
   insecure: 'This connection is not encrypted: your password and backup keys cross the network in clear text. Use HTTPS (see the setup notes) unless you are on localhost.',
-  setup: { title: 'Welcome', sub: 'Create the administrator account for this install.', code: 'Setup code', password: 'Password (at least 12 characters)', submit: 'Create account', hint: 'Get the code by running pnpm exec tsx scripts/manager-panel.ts setup-code on this machine.' },
-  login: { title: 'Sign in', sub: 'Manage your NanoClaw install.', password: 'Password', submit: 'Sign in' },
+  setup: { title: 'Welcome', sub: 'Create the administrator account for this install.', code: 'Setup code', password: 'Password (at least 12 characters)', submit: 'Create account', hint: 'Get the code by running pnpm exec tsx scripts/manager-panel.ts setup-code on this machine.', help: 'Where do I get the code?' },
+  login: { title: 'Sign in', sub: 'Manage your NanoClaw install.', password: 'Password', submit: 'Sign in', forgot: 'Forgot the password?' },
   reauth: { title: 'Confirm your password', body: 'This action needs your password again.', submit: 'Confirm' },
   cancel: 'Cancel', close: 'Close', loading: 'Loading…', none: 'Nothing here yet.',
   overview: { title: 'Overview', release: 'Release', agents: 'Agents', running: 'Running now', sessions: 'Sessions', gateway: 'Credential gateway', channels: 'Channels', providers: 'Providers', backups: 'Backups', latest: 'Latest', never: 'never', up: 'Uptime' },
-  agents: { title: 'Agents', name: 'Name', provider: 'Provider', model: 'Model', state: 'State', restart: 'Restart', running: 'running', idle: 'idle', restarted: 'Restart requested.' },
+  agents: { title: 'Agents', terminalNote: 'Adding, wiring and removing agents and channels is done from a terminal.', addHelp: 'How', rebuildHelp: 'Rebuild an agent image', name: 'Name', provider: 'Provider', model: 'Model', state: 'State', restart: 'Restart', running: 'running', idle: 'idle', restarted: 'Restart requested.' },
   model: {
-    title: 'Model', current: 'Current settings', baseUrl: 'Endpoint (OpenAI-compatible, ending in /v1)', model: 'Model', small: 'Small model (optional)',
+    title: 'Model', current: 'Current settings', baseUrl: 'Endpoint (OpenAI-compatible, ending in /v1)', model: 'Model', small: 'Small model (optional)', moreAbout: 'More', smallHelp: 'A lighter model OpenCode can use for minor background work. Leave it empty to use the main model for everything, which is right when you run a single model.',
     check: 'Check endpoint', apply: 'Apply to all agents', follows: 'Uses the install settings', differs: 'Different from the install settings',
-    keyNote: 'API keys are not entered here. For an endpoint that needs one, store it with: pnpm exec tsx setup/index.ts --step provider-auth opencode',
+    keyNote: 'API keys are not entered here. An endpoint that needs one gets its key through a terminal.', keyHelp: 'How to store a key', applyHelp: 'What applying does', errorsHelp: 'Endpoint errors explained',
     checked: 'Endpoint checked.', applied: 'Applied.', affected: 'Agents that will be restarted', context: 'Context window', models: 'Models offered',
     interrupted: 'A previous change was interrupted. It is rolled back automatically at the next start.',
   },
@@ -119,14 +161,14 @@ var T = {
     verify: 'Verify', download: 'Download', del: 'Delete', force: 'Back up even if agents are running',
     keyTitle: 'Save this key now', keyBody: 'This key is needed to open the backup and is not stored anywhere. Put it in your password manager.', keySaved: 'I have stored the key',
     verifyKey: 'Backup key', verifyOk: 'The backup is intact.', confirmDelete: 'Delete this backup permanently?', waiting: 'Waiting for running agents to finish before the snapshot…',
-    note: 'Restoring is done from the terminal with the service stopped: pnpm exec tsx scripts/manager-backup.ts restore <id>',
+    note: 'Restoring is done from a terminal, with NanoClaw stopped.', restoreHelp: 'How to restore', keyHelp: 'About the key', consistencyHelp: 'Consistency levels', retentionHelp: 'Retention and pruning', moveHelp: 'Moving to another machine',
   },
   errors: {
     invalid_credentials: 'Wrong password.', login_throttled: 'Too many attempts. Wait a moment and try again.', invalid_setup_code: 'That setup code is not valid.',
     password_too_short: 'The password is too short.', password_too_long: 'The password is too long.', already_configured: 'An administrator already exists.',
     unauthenticated: 'Your session ended. Sign in again.', reauth_required: 'Confirm your password first.', rate_limited: 'Too many requests. Slow down.',
     agents_busy: 'Agents are still running. Try again later or back up anyway.', probe_failed: 'The endpoint did not pass its checks',
-    model_not_found: 'The endpoint does not list that model.', endpoint_unreachable: 'Could not reach the endpoint.', endpoint_invalid: 'That is not a valid endpoint URL.',
+    model_not_found: 'The endpoint does not list that model.', small_model_not_found: 'The endpoint does not list the small model.', endpoint_unreachable: 'Could not reach the endpoint.', endpoint_invalid: 'That is not a valid endpoint URL.',
     endpoint_not_allowed: 'That address is not allowed.', endpoint_insecure: 'Plain HTTP is only accepted for local addresses; use HTTPS.',
     endpoint_unauthorized: 'The endpoint wants an API key.', endpoint_unresolvable: 'The name could not be resolved.', endpoint_tls_failed: 'The TLS certificate could not be verified.',
     endpoint_invalid_response: 'The endpoint did not answer like an OpenAI-compatible API.', inference_failed: 'The model did not answer a test request.',
@@ -152,6 +194,7 @@ function h(tag, attrs) {
   }
   return el;
 }
+function guide(anchor, label) { return h('a', { class: 'help', href: '/guide#' + anchor, target: '_blank', rel: 'noopener' }, label); }
 function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
 function show(node) { clear(main); main.appendChild(node); }
 function message(kind, text) { return h('div', { class: 'notice ' + kind, role: kind === 'error' ? 'alert' : 'status' }, text); }
@@ -214,8 +257,8 @@ function viewAuth(needSetup) {
     ev.preventDefault(); clear(out);
     var p = needSetup ? api('POST', '/setup', { code: code.value, password: password.value }) : api('POST', '/session', { password: password.value });
     p.then(function (s) { state.csrf = s.csrf_token; state.insecure = s.insecure_http; enter(); }).catch(function (err) { out.appendChild(message('error', explain(err))); });
-  } }, needSetup && h('label', {}, T.setup.code, code), needSetup && h('p', { class: 'hint' }, T.setup.hint),
-    h('label', {}, needSetup ? T.setup.password : T.login.password, password), out,
+  } }, needSetup && h('label', {}, T.setup.code, code), needSetup && h('p', { class: 'hint' }, T.setup.hint, ' ', guide('create-the-administrator', T.setup.help)),
+    h('label', {}, needSetup ? T.setup.password : T.login.password, password), !needSetup && h('p', { class: 'hint' }, guide('forgotten-password', T.login.forgot)), out,
     h('button', { class: 'primary', type: 'submit' }, needSetup ? T.setup.submit : T.login.submit));
   show(h('div', { class: 'auth' }, h('div', { class: 'auth-card' },
     h('div', { class: 'auth-brand' }, h('span', { class: 'auth-mark', 'aria-hidden': 'true' }, 'N'), 'NanoClaw Manager'),
@@ -233,11 +276,14 @@ function viewOverview() {
     box.appendChild(h('p', {}, h('span', { class: 'muted' }, T.overview.channels + ': '), o.channels.length ? o.channels.join(', ') : '-'));
     box.appendChild(h('p', {}, h('span', { class: 'muted' }, T.overview.providers + ': '), o.providers.length ? o.providers.join(', ') : '-'));
     box.appendChild(h('p', {}, h('span', { class: 'muted' }, T.overview.backups + ': '), o.backups.count + ' (' + T.overview.latest + ': ' + (o.backups.latest ? fmtDate(o.backups.latest) : T.overview.never) + ')'));
+    var links = h('div', { class: 'links' });
+    T.terminal.items.forEach(function (item) { links.appendChild(guide(item[0], item[1])); });
+    main.firstChild.appendChild(h('div', { class: 'card' }, h('h2', {}, T.terminal.title), h('p', { class: 'muted' }, T.terminal.intro), links));
   }).catch(function (err) { clear(box); fail(box, err); });
 }
 
 function viewAgents() {
-  var box = h('div', { class: 'card' }, T.loading); var out = h('div'); show(h('div', {}, h('h1', {}, T.agents.title), out, box));
+  var box = h('div', { class: 'card' }, T.loading); var out = h('div'); show(h('div', {}, h('h1', {}, T.agents.title), h('p', { class: 'muted' }, T.agents.terminalNote, ' ', guide('channels-and-agents', T.agents.addHelp), ' · ', guide('rebuilding-agent-images', T.agents.rebuildHelp)), out, box));
   function load() {
     api('GET', '/agents').then(function (r) {
       clear(box);
@@ -300,14 +346,14 @@ function viewModel() {
     }).catch(function (err) { applyBtn.disabled = false; fail(result, err); });
   };
   [url, model, small].forEach(function (el) { el.oninput = function () { checked = false; applyBtn.disabled = true; }; });
-  form.appendChild(h('form', { onsubmit: function (ev) { ev.preventDefault(); } }, h('label', {}, T.model.baseUrl, url), h('label', {}, T.model.model, model, list), h('label', {}, T.model.small, small),
-    h('p', { class: 'muted' }, T.model.keyNote), result, h('div', { class: 'row' }, checkBtn, applyBtn)));
+  form.appendChild(h('form', { onsubmit: function (ev) { ev.preventDefault(); } }, h('label', {}, T.model.baseUrl, url), h('label', {}, T.model.model, model, list), h('label', {}, T.model.small, small), h('p', { class: 'hint' }, T.model.smallHelp, ' ', guide('the-small-model', T.model.moreAbout)),
+    h('p', { class: 'muted' }, T.model.keyNote, ' ', guide('api-keys', T.model.keyHelp)), h('div', { class: 'links' }, guide('how-a-model-change-works', T.model.applyHelp), guide('endpoint-checks-and-errors', T.model.errorsHelp)), result, h('div', { class: 'row' }, checkBtn, applyBtn)));
 }
 
 function viewBackups() {
   var out = h('div'); var box = h('div', { class: 'card' }, T.loading); var force = h('input', { type: 'checkbox' });
   var createBtn = h('button', { class: 'primary', type: 'button' }, T.backups.create);
-  show(h('div', {}, h('h1', {}, T.backups.title), h('p', { class: 'muted' }, T.backups.note), h('div', { class: 'row' }, createBtn, h('label', { class: 'row' }, force, T.backups.force)), out, box));
+  show(h('div', {}, h('h1', {}, T.backups.title), h('p', { class: 'muted' }, T.backups.note, ' ', guide('restoring-a-backup', T.backups.restoreHelp)), h('div', { class: 'links' }, guide('the-backup-key', T.backups.keyHelp), guide('consistency-levels', T.backups.consistencyHelp), guide('retention-and-pruning', T.backups.retentionHelp), guide('moving-to-another-machine', T.backups.moveHelp)), h('div', { class: 'row' }, createBtn, h('label', { class: 'row' }, force, T.backups.force)), out, box));
   createBtn.onclick = function () {
     clear(out); createBtn.disabled = true;
     ensureReauth().then(function () { out.appendChild(message('ok', T.backups.waiting)); return api('POST', '/backups', { force: force.checked }); }).then(function (r) {
@@ -318,7 +364,7 @@ function viewBackups() {
     var saved = h('input', { type: 'checkbox' }); var done = h('button', { class: 'primary', type: 'button', disabled: true }, T.close);
     dialog(function (close) {
       saved.onchange = function () { done.disabled = !saved.checked; }; done.onclick = close;
-      return h('div', {}, h('h1', {}, T.backups.keyTitle), h('p', {}, T.backups.keyBody), h('code', { class: 'key' }, key), h('label', { class: 'row' }, saved, T.backups.keySaved), h('div', { class: 'row' }, done));
+      return h('div', {}, h('h1', {}, T.backups.keyTitle), h('p', {}, T.backups.keyBody), h('code', { class: 'key' }, key), h('p', {}, guide('the-backup-key', T.backups.keyHelp)), h('label', { class: 'row' }, saved, T.backups.keySaved), h('div', { class: 'row' }, done));
     });
   }
   function load() {
@@ -356,7 +402,7 @@ function enter() {
   document.getElementById('top').hidden = false;
   var local = ['localhost', '127.0.0.1', '[::1]'].indexOf(location.hostname) >= 0;
   var warn = state.insecure && !local;
-  var banner = document.getElementById('banner'); banner.hidden = !warn; banner.textContent = warn ? T.insecure : '';
+  var banner = document.getElementById('banner'); banner.hidden = !warn; clear(banner); if (warn) { banner.appendChild(document.createTextNode(T.insecure)); banner.appendChild(guide('https-and-network-access', T.guide.insecureMore)); }
   go(state.view);
 }
 function start() {

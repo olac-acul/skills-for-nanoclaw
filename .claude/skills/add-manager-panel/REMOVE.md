@@ -28,6 +28,7 @@ src/modules/manager-panel/config.ts
 src/modules/manager-panel/env-file.test.ts
 src/modules/manager-panel/env-file.ts
 src/modules/manager-panel/fixtures/fake-backend.ts
+src/modules/manager-panel/guide-html.ts
 src/modules/manager-panel/index.ts
 src/modules/manager-panel/model-endpoint.test.ts
 src/modules/manager-panel/model-endpoint.ts

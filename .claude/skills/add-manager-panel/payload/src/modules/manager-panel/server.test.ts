@@ -274,6 +274,18 @@ describe('request protections', () => {
     expect(script).toContain('location.hostname');
   });
 
+  it('serves the guide, with its anchors and the same protections as the other pages', async () => {
+    const page = await fetch(base + '/guide');
+    const html = await page.text();
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-type')).toContain('text/html');
+    expect(page.headers.get('content-security-policy')).toContain("script-src 'self'");
+    for (const id of ['restoring-a-backup', 'forgotten-password', 'api-keys', 'the-small-model'])
+      expect(html).toContain(`id="${id}"`);
+    expect(html).not.toMatch(/<script|onclick=|<style/);
+    expect(await rawGet('/guide', 'attacker.example.com')).toBe(421);
+  });
+
   it('serves the UI script without ever writing untrusted values as HTML', async () => {
     const script = await (await fetch(base + '/app.js')).text();
     expect(script).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(/);
@@ -365,6 +377,20 @@ describe('model settings', () => {
       restarts_needed: 2,
     });
     expect(backend.env.OPENCODE_MODEL).toBe('openai/old');
+  });
+
+  it('reports a small model the endpoint does not list', async () => {
+    const login = await setupAdmin();
+    const res = await call('POST', '/api/v1/model/preflight', {
+      ...login,
+      body: { baseUrl: 'http://models.test:8000/v1', model: 'qwen', smallModel: 'missing' },
+    });
+    expect(res.body).toMatchObject({ ok: false, reason: 'small_model_not_found', small_model: 'not_found' });
+    const good = await call('POST', '/api/v1/model/preflight', {
+      ...login,
+      body: { baseUrl: 'http://models.test:8000/v1', model: 'qwen', smallModel: 'llama' },
+    });
+    expect(good.body).toMatchObject({ ok: true, small_model: 'listed' });
   });
 
   it('applies only after the password is confirmed again, then points every agent at the endpoint', async () => {

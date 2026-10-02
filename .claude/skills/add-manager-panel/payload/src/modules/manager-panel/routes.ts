@@ -323,12 +323,17 @@ export function buildRoutes(): Route[] {
     limit: 'probe',
     parse: modelBody,
     run: async (ctx) => {
-      const preview = await previewModelChange(ctx.deps.backend.model, ctx.body as { baseUrl: string; model: string });
+      const preview = await previewModelChange(
+        ctx.deps.backend.model,
+        ctx.body as { baseUrl: string; model: string; smallModel?: string },
+      );
+      const smallMissing = preview.smallModel === 'not_found';
       return {
         status: 200,
         body: {
-          ok: preview.probe.reason === null,
-          reason: preview.probe.reason,
+          ok: preview.probe.reason === null && !smallMissing,
+          reason: preview.probe.reason ?? (smallMissing ? 'small_model_not_found' : null),
+          small_model: preview.smallModel,
           models: preview.probe.models,
           context_limit: preview.probe.contextLimit,
           local: preview.probe.local, // privacy-scan: allow -- property name or synthetic test input
