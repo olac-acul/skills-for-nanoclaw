@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import type { BackupRecord } from '../../manager-backup/service.js';
 import type { AgentInfo, PanelBackend } from '../backend.js';
+import type { CredentialsPort, LoginState } from '../credentials.js';
 import type { GroupModel, Journal, ModelPorts } from '../model-settings.js';
 import type { ProbeResult } from '../model-endpoint.js';
 
@@ -19,6 +20,10 @@ export interface FakeBackend extends PanelBackend {
   records: BackupRecord[];
   createCalls: Array<{ waitMs?: number; force?: boolean }>;
   busy: boolean;
+  creds: { claude: boolean; openaiKey: boolean; chatgptLogin: boolean };
+  saved: Array<{ kind: string; length: number }>;
+  login: LoginState;
+  loginCancelled: boolean;
 }
 
 export function fakeBackend(dir: string): FakeBackend {
@@ -52,6 +57,31 @@ export function fakeBackend(dir: string): FakeBackend {
     records: [],
     createCalls: [],
     busy: false,
+    creds: { claude: false, openaiKey: false, chatgptLogin: false },
+    saved: [],
+    login: { state: 'idle' },
+    loginCancelled: false,
+    bridgeAddress: () => '100.64.0.1',
+    credentials: {
+      status: async () => ({ ...self.creds }),
+      async saveClaude(value) {
+        self.saved.push({ kind: 'claude', length: value.length });
+        self.creds.claude = true;
+      },
+      async saveOpenAiKey(value) {
+        self.saved.push({ kind: 'openai-key', length: value.length });
+        self.creds.openaiKey = true;
+      },
+      startChatgptLogin() {
+        self.login = { state: 'waiting', url: 'https://login.example.test/device', code: 'ABCD-12345' };
+        return self.login;
+      },
+      loginState: () => self.login,
+      cancelChatgptLogin() {
+        self.loginCancelled = true;
+        self.login = { state: 'error', error: 'login_cancelled' };
+      },
+    } satisfies CredentialsPort,
     async overview() {
       return {
         release: '2.4.0',
@@ -88,6 +118,7 @@ export function fakeBackend(dir: string): FakeBackend {
       async restartGroup(id) {
         self.restarts.push(id);
       },
+      credentials: async () => ({ ...self.creds }),
       probe: async () => self.probeResult,
       readJournal: () => self.journal,
       writeJournal: (journal) => {

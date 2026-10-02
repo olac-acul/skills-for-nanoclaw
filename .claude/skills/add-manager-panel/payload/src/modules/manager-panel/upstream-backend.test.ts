@@ -109,7 +109,15 @@ beforeEach(async () => {
   };
   const state = new PanelState(path.join(project, 'data', 'manager-panel'));
   const backups = new BackupService({ host, backupsDir: path.join(tmp, 'backups') });
-  const backend = createUpstreamBackend({ projectRoot: project, state, backups });
+  const credentials = {
+    status: async () => ({ claude: false, openaiKey: false, chatgptLogin: false }),
+    saveClaude: async () => undefined,
+    saveOpenAiKey: async () => undefined,
+    startChatgptLogin: () => ({ state: 'idle' as const }),
+    loginState: () => ({ state: 'idle' as const }),
+    cancelChatgptLogin: () => undefined,
+  };
+  const backend = createUpstreamBackend({ projectRoot: project, state, backups, credentials });
   backend.model.probe = async () => probe; // no network in tests
   server = createPanelServer({ state, backend, scrypt: { N: 2 ** 14, r: 8, p: 1 } });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

@@ -11,7 +11,7 @@ the local network.
 
 - **Overview:** release, gateway, channels, providers, agents, running agents.
 - **Agents:** list and restart.
-- **Model:** point every agent at one OpenAI-compatible endpoint (a local server such as llama.cpp or vLLM, or a hosted provider). The endpoint is checked first (`/models`, the model is listed, a one-token completion). The change writes the `OPENCODE_*` settings in `.env` and each group's provider and model, restarts the groups, and keeps a journal so a failure, or a crash in the middle, puts everything back.
+- **Model:** point every agent at one provider: an OpenAI-compatible endpoint (a local server such as llama.cpp, vLLM or Ollama, or a hosted service), ChatGPT (subscription login or API key) or Claude (API key or subscription token). Keys and tokens are handed straight to the credential gateway and never shown again. The endpoint is checked first (`/models`, the model is listed, a one-token completion). The change writes the `OPENCODE_*` settings in `.env` and each group's provider and model, restarts the groups, and keeps a journal so a failure, or a crash in the middle, puts everything back.
 - **Backups:** create (waits for running agents to finish), verify with the key, download, delete. Each backup has its own key, shown once. Restoring is done from the terminal (see `add-manager-backup`).
 
 The panel serves a detailed guide at `/guide` (the source is `docs/guide.md` in this repository); every place where the panel hands you over to a terminal links to the matching section.
@@ -23,7 +23,7 @@ certificate, bad setting) logs why; NanoClaw keeps running.
 ## Prerequisites
 
 - `add-manager-backup` installed first: the panel's backup page uses its library.
-- `add-opencode` (upstream) for the agents to actually use an OpenAI-compatible endpoint. The panel only writes the settings that skill reads.
+- `add-opencode` (upstream) for the agents to actually use an OpenAI-compatible endpoint or ChatGPT, and `add-onecli` (upstream) as the place credentials are kept. The panel only writes the settings those read; ChatGPT and Claude credential entry also needs both installed.
 
 ## Install
 
@@ -35,11 +35,17 @@ If that check fails, install `add-manager-backup` first, or update NanoClaw
 (`/update-nanoclaw`) when the failing name is an upstream one.
 
 ```nc:copy
+payload/scripts/manager-credentials.ts -> scripts/manager-credentials.ts
 payload/scripts/manager-panel.ts -> scripts/manager-panel.ts
+payload/scripts/tsconfig.manager-credentials.json -> scripts/tsconfig.manager-credentials.json
 payload/scripts/tsconfig.manager-panel.json -> scripts/tsconfig.manager-panel.json
 payload/src/modules/manager-panel/auth.ts -> src/modules/manager-panel/auth.ts
 payload/src/modules/manager-panel/backend.ts -> src/modules/manager-panel/backend.ts
 payload/src/modules/manager-panel/config.ts -> src/modules/manager-panel/config.ts
+payload/src/modules/manager-panel/credentials-protocol.test.ts -> src/modules/manager-panel/credentials-protocol.test.ts
+payload/src/modules/manager-panel/credentials-protocol.ts -> src/modules/manager-panel/credentials-protocol.ts
+payload/src/modules/manager-panel/credentials.test.ts -> src/modules/manager-panel/credentials.test.ts
+payload/src/modules/manager-panel/credentials.ts -> src/modules/manager-panel/credentials.ts
 payload/src/modules/manager-panel/env-file.test.ts -> src/modules/manager-panel/env-file.test.ts
 payload/src/modules/manager-panel/env-file.ts -> src/modules/manager-panel/env-file.ts
 payload/src/modules/manager-panel/fixtures/fake-backend.ts -> src/modules/manager-panel/fixtures/fake-backend.ts
@@ -81,6 +87,14 @@ pnpm run build
 
 ```nc:run effect:build
 pnpm exec tsc -p scripts/tsconfig.manager-panel.json
+```
+
+The provider credentials helper builds on upstream's OpenCode and OneCLI skills. It is typechecked only
+when they are installed; without them the panel works and simply does not offer ChatGPT or Claude
+credentials.
+
+```nc:run effect:build
+if [ -f scripts/opencode-auth.ts ] && [ -f scripts/opencode-vault.ts ]; then pnpm exec tsc -p scripts/tsconfig.manager-credentials.json; else echo "add-opencode is not installed: provider credentials will not be offered"; fi
 ```
 
 ```nc:run effect:test

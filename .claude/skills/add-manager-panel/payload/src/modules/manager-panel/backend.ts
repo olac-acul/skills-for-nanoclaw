@@ -5,6 +5,7 @@
  */
 import type { BackupRecord, CreateOptions } from '../manager-backup/service.js';
 import type { VerifyResult } from '../manager-backup/bundle.js';
+import type { CredentialsPort } from './credentials.js';
 import type { ModelPorts } from './model-settings.js';
 
 export interface Overview {
@@ -47,5 +48,8 @@ export interface PanelBackend {
   restartAgent(id: string): Promise<void>;
   channels(): Promise<ChannelInfo[]>;
   model: ModelPorts;
+  credentials: CredentialsPort;
+  /** The Docker bridge address as seen from the host, where a model server on this machine is reachable from agents. */
+  bridgeAddress(): string | null;
   backups: BackupPort;
 }

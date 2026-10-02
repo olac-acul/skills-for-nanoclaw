@@ -286,6 +286,19 @@ describe('request protections', () => {
     expect(await rawGet('/guide', 'attacker.example.com')).toBe(421);
   });
 
+  it('opens the guide in the same tab and keeps the current page in the address', async () => {
+    const script = await (await fetch(base + '/app.js')).text();
+    const html = await (await fetch(base + '/')).text();
+    // Guide links stay in the tab; only the external ChatGPT sign-in page opens elsewhere.
+    const guideLink = /function guide\(anchor, label\) \{[^\n]*\}/.exec(script)?.[0] ?? '';
+    expect(guideLink).toContain('/guide#');
+    expect(guideLink).not.toContain('_blank');
+    expect(html).not.toContain('_blank');
+    expect(script.match(/_blank/g)).toHaveLength(1);
+    expect(script).toContain('location.hash');
+    expect(script).toContain("addEventListener('hashchange'");
+  });
+
   it('serves the UI script without ever writing untrusted values as HTML', async () => {
     const script = await (await fetch(base + '/app.js')).text();
     expect(script).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(/);
@@ -505,5 +518,117 @@ describe('audit log', () => {
     expect(audit).not.toContain(PASSWORD);
     expect(audit).not.toContain('definitely-wrong-password');
     expect(audit).not.toContain('aaaaaaaa');
+  });
+});
+
+describe('providers and credentials', () => {
+  const SECRET = 'sk-ant-oat01-' + 'q'.repeat(40);
+
+  it('tells the page which provider is set up and where a local model server is reachable', async () => {
+    const login = await setupAdmin();
+    const res = await call('GET', '/api/v1/model', login);
+    expect(res.body).toMatchObject({ kind: 'compatible', auth: null, bridge_address: '100.64.0.1' });
+  });
+
+  it('shows what is stored and never a value', async () => {
+    const login = await setupAdmin();
+    backend.creds.claude = true;
+    const res = await call('GET', '/api/v1/credentials', login);
+    expect(res.body).toEqual({ claude: true, openai_key: false, chatgpt_login: false });
+  });
+
+  it('stores a Claude credential only after the password is confirmed, and answers without echoing it', async () => {
+    const login = await setupAdmin();
+    expect(
+      (await call('POST', '/api/v1/credentials/claude', { ...login, body: { value: SECRET } })).body.error.code,
+    ).toBe('reauth_required');
+    expect(backend.saved).toEqual([]);
+    await reauth(login);
+    const res = await call('POST', '/api/v1/credentials/claude', { ...login, body: { value: SECRET } });
+    expect(res.body).toEqual({ saved: true });
+    expect(res.text).not.toContain(SECRET);
+    expect(backend.saved).toEqual([{ kind: 'claude', length: SECRET.length }]);
+    const audit = fs.readFileSync(path.join(dir, 'state', 'audit.jsonl'), 'utf8');
+    expect(audit).toContain('"endpoint":"credential_claude"');
+    expect(audit).not.toContain(SECRET);
+  });
+
+  it('stores an OpenAI key and rejects values that are not a single token', async () => {
+    const login = await setupAdmin();
+    await reauth(login);
+    expect((await call('POST', '/api/v1/credentials/openai-key', { ...login, body: { value: SECRET } })).status).toBe(
+      200,
+    );
+    for (const bad of ['', 'short', 'has spaces in the middle of it', 'x'.repeat(2000)]) {
+      const res = await call('POST', '/api/v1/credentials/openai-key', { ...login, body: { value: bad } });
+      expect(res.status, bad).toBe(400);
+      expect(res.text).not.toContain(bad || 'never');
+    }
+    expect(backend.saved).toHaveLength(1);
+  });
+
+  it('runs a ChatGPT sign-in: start (password required), poll for the page and code, cancel', async () => {
+    const login = await setupAdmin();
+    expect((await call('POST', '/api/v1/credentials/chatgpt/login', { ...login })).body.error.code).toBe(
+      'reauth_required',
+    );
+    await reauth(login);
+    const started = await call('POST', '/api/v1/credentials/chatgpt/login', { ...login });
+    expect(started.status).toBe(202);
+    expect(started.body).toEqual({ state: 'waiting', url: 'https://login.example.test/device', code: 'ABCD-12345' });
+    expect((await call('GET', '/api/v1/credentials/chatgpt/login', login)).body.state).toBe('waiting');
+    const cancelled = await call('DELETE', '/api/v1/credentials/chatgpt/login', login);
+    expect(cancelled.body).toEqual({ state: 'error', error: 'login_cancelled' });
+    expect(backend.loginCancelled).toBe(true);
+  });
+
+  it('switches every agent to Claude once a credential exists', async () => {
+    const login = await setupAdmin();
+    await reauth(login);
+    const refused = await call('POST', '/api/v1/model/apply', {
+      ...login,
+      body: { kind: 'claude', model: 'some-model' },
+    });
+    expect(refused.status).toBe(422);
+    expect(refused.body.error).toMatchObject({ code: 'probe_failed', detail: 'credential_missing' });
+    backend.creds.claude = true;
+    const res = await call('POST', '/api/v1/model/apply', { ...login, body: { kind: 'claude', model: 'some-model' } });
+    expect(res.body).toEqual({ agents: 2, restarted: 2, restart_failures: 0 });
+    expect(backend.groups.every((g) => g.provider === null && g.model === 'some-model')).toBe(true);
+    expect((await call('GET', '/api/v1/model', login)).body.kind).toBe('claude');
+  });
+
+  it('switches to ChatGPT with the right authentication, and checks the choice before applying', async () => {
+    const login = await setupAdmin();
+    await reauth(login);
+    const check = await call('POST', '/api/v1/model/preflight', {
+      ...login,
+      body: { kind: 'chatgpt', auth: 'subscription', model: 'gpt-test' },
+    });
+    expect(check.body).toMatchObject({ ok: false, reason: 'credential_missing', credential: 'missing' });
+    backend.creds.chatgptLogin = true;
+    const apply = await call('POST', '/api/v1/model/apply', {
+      ...login,
+      body: { kind: 'chatgpt', auth: 'subscription', model: 'gpt-test' },
+    });
+    expect(apply.status).toBe(200);
+    expect(backend.env).toMatchObject({
+      OPENCODE_PROVIDER: 'openai',
+      OPENCODE_BASE_URL: 'native',
+      OPENCODE_AUTH_MODE: 'chatgpt',
+      OPENCODE_MODEL: 'openai/gpt-test',
+    });
+    expect((await call('GET', '/api/v1/model', login)).body).toMatchObject({ kind: 'chatgpt', auth: 'subscription' });
+  });
+
+  it.each([
+    [{ kind: 'nonsense', model: 'm' }],
+    [{ kind: 'chatgpt', model: 'm' }],
+    [{ kind: 'chatgpt', auth: 'carrier-pigeon', model: 'm' }],
+    [{ kind: 'compatible', model: 'm' }],
+    [{ baseUrl: 'http://models.test/v1' }],
+  ])('rejects the malformed provider request %j', async (body) => {
+    const login = await setupAdmin();
+    expect((await call('POST', '/api/v1/model/preflight', { ...login, body })).body.error.code).toBe('invalid_request');
   });
 });

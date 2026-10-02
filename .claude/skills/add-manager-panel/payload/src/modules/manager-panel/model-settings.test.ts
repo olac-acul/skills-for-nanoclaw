@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { ProbeResult } from './model-endpoint.js';
 import {
   ModelSettingsError,
+  applyProviderChange,
+  detectProvider,
+  previewProviderChange,
   applyModelChange,
   outputLimitFor,
   previewModelChange,
@@ -22,6 +25,7 @@ interface Fake extends ModelPorts {
   restarts: string[];
   failOn: { setGroup?: string; restart?: string; updateEnvOnce?: boolean };
   probeResult: ProbeResult;
+  creds: { claude: boolean; openaiKey: boolean; chatgptLogin: boolean };
 }
 
 function fake(): Fake {
@@ -40,6 +44,7 @@ function fake(): Fake {
     restarts: [],
     failOn: {},
     probeResult: GOOD,
+    creds: { claude: false, openaiKey: false, chatgptLogin: false },
     readEnv: (keys) => Object.fromEntries(keys.map((key) => [key, self.env[key] ?? null])),
     updateEnv(changes) {
       if (self.failOn.updateEnvOnce) {
@@ -68,6 +73,7 @@ function fake(): Fake {
       self.restarts.push(id);
     },
     probe: async () => self.probeResult,
+    credentials: async () => self.creds,
     readJournal: () => self.journal,
     writeJournal: (journal) => {
       self.journal = journal;
@@ -254,5 +260,130 @@ describe('readModelStatus', () => {
       { id: 'g1', provider: 'claude', model: null, followsSettings: false },
       { id: 'g2', provider: 'opencode', model: 'openrouter/old', followsSettings: true },
     ]);
+  });
+});
+
+describe('providers other than an endpoint', () => {
+  it('switches every agent to Claude (the default provider) with an optional model, once a credential is stored', async () => {
+    await expect(applyProviderChange(ports, { kind: 'claude', model: 'claude-test-model' })).rejects.toMatchObject({
+      code: 'probe_failed',
+      detail: 'credential_missing',
+    });
+    expect(ports.groups[0]).toEqual({ id: 'g1', provider: 'claude', model: null });
+    expect(ports.journal).toBeNull();
+
+    ports.creds.claude = true;
+    const envBefore = JSON.stringify(ports.env);
+    const outcome = await applyProviderChange(ports, { kind: 'claude', model: 'claude-test-model' });
+    expect(outcome).toEqual({ groups: 2, restarted: 2, restartFailures: [] });
+    expect(ports.groups).toEqual([
+      { id: 'g1', provider: null, model: 'claude-test-model' },
+      { id: 'g2', provider: null, model: 'claude-test-model' },
+    ]);
+    expect(JSON.stringify(ports.env)).toBe(envBefore); // OPENCODE_* untouched
+    await applyProviderChange(ports, { kind: 'claude' });
+    expect(ports.groups.every((g) => g.provider === null && g.model === null)).toBe(true);
+  });
+
+  it('sets up ChatGPT with a subscription login: native endpoint, ChatGPT auth mode, no limits', async () => {
+    ports.env.OPENCODE_MODEL_CONTEXT_LIMIT = '8192';
+    ports.env.OPENCODE_MODEL_OUTPUT_LIMIT = '4096';
+    await expect(
+      applyProviderChange(ports, { kind: 'chatgpt', auth: 'subscription', model: 'gpt-test' }),
+    ).rejects.toMatchObject({ detail: 'credential_missing' });
+    ports.creds.chatgptLogin = true;
+    await applyProviderChange(ports, {
+      kind: 'chatgpt',
+      auth: 'subscription',
+      model: 'gpt-test',
+      smallModel: 'gpt-mini',
+    });
+    expect(ports.env).toMatchObject({
+      OPENCODE_PROVIDER: 'openai',
+      OPENCODE_BASE_URL: 'native',
+      OPENCODE_AUTH_MODE: 'chatgpt',
+      OPENCODE_MODEL: 'openai/gpt-test',
+      OPENCODE_SMALL_MODEL: 'openai/gpt-mini',
+    });
+    expect(ports.env.OPENCODE_MODEL_CONTEXT_LIMIT).toBeUndefined();
+    expect(ports.env.OPENCODE_MODEL_OUTPUT_LIMIT).toBeUndefined();
+    expect(ports.groups.every((g) => g.provider === 'opencode' && g.model === 'openai/gpt-test')).toBe(true);
+  });
+
+  it('sets up ChatGPT with an API key: native endpoint and no ChatGPT auth mode', async () => {
+    ports.env.OPENCODE_AUTH_MODE = 'chatgpt';
+    ports.creds.chatgptLogin = true; // a login does not satisfy the API-key choice
+    await expect(
+      applyProviderChange(ports, { kind: 'chatgpt', auth: 'api-key', model: 'gpt-test' }),
+    ).rejects.toMatchObject({ detail: 'credential_missing' });
+    ports.creds.openaiKey = true;
+    await applyProviderChange(ports, { kind: 'chatgpt', auth: 'api-key', model: 'gpt-test' });
+    expect(ports.env).toMatchObject({
+      OPENCODE_PROVIDER: 'openai',
+      OPENCODE_BASE_URL: 'native',
+      OPENCODE_MODEL: 'openai/gpt-test',
+    });
+    expect(ports.env.OPENCODE_AUTH_MODE).toBeUndefined();
+  });
+
+  it('rolls back a failed switch exactly like an endpoint change', async () => {
+    ports.creds.claude = true;
+    ports.failOn.setGroup = 'g2';
+    await expect(applyProviderChange(ports, { kind: 'claude', model: 'm' })).rejects.toMatchObject({
+      code: 'apply_failed_rolled_back',
+    });
+    expect(ports.groups).toEqual([
+      { id: 'g1', provider: 'claude', model: null },
+      { id: 'g2', provider: 'opencode', model: 'openrouter/old' },
+    ]);
+    expect(ports.journal).toBeNull();
+  });
+
+  it('previews credentials without changing anything, and rejects malformed model names', async () => {
+    const before = JSON.stringify([ports.env, ports.groups]);
+    expect(await previewProviderChange(ports, { kind: 'claude' })).toMatchObject({
+      ok: false,
+      reason: 'credential_missing',
+      credential: 'missing',
+      groupsAffected: 2,
+    });
+    ports.creds.claude = true;
+    expect(await previewProviderChange(ports, { kind: 'claude' })).toMatchObject({ ok: true, credential: 'present' });
+    await expect(
+      previewProviderChange(ports, { kind: 'chatgpt', auth: 'api-key', model: 'bad name; x' }),
+    ).rejects.toMatchObject({ code: 'invalid_input' });
+    expect(JSON.stringify([ports.env, ports.groups])).toBe(before);
+  });
+
+  it('delegates an endpoint to the existing check and apply', async () => {
+    const preview = await previewProviderChange(ports, {
+      kind: 'compatible',
+      baseUrl: 'http://models.test:8000/v1',
+      model: 'm1',
+    });
+    expect(preview).toMatchObject({ ok: true, credential: 'not_needed', models: ['m1', 'm2'], contextLimit: 32768 });
+    await applyProviderChange(ports, { kind: 'compatible', baseUrl: 'http://models.test:8000/v1', model: 'm1' });
+    expect(ports.env.OPENCODE_BASE_URL).toBe('http://models.test:8000/v1');
+  });
+});
+
+describe('detectProvider', () => {
+  const group = (provider: string | null): GroupModel => ({ id: 'g', provider, model: null });
+  it('tells the three setups apart', () => {
+    expect(detectProvider({}, [group(null), group('claude')])).toEqual({ kind: 'claude', auth: null });
+    expect(
+      detectProvider({ OPENCODE_PROVIDER: 'openai', OPENCODE_BASE_URL: 'native', OPENCODE_AUTH_MODE: 'chatgpt' }, [
+        group('opencode'),
+      ]),
+    ).toEqual({ kind: 'chatgpt', auth: 'subscription' });
+    expect(detectProvider({ OPENCODE_PROVIDER: 'openai', OPENCODE_BASE_URL: 'native' }, [group('opencode')])).toEqual({
+      kind: 'chatgpt',
+      auth: 'api-key',
+    });
+    expect(detectProvider({ OPENCODE_BASE_URL: 'http://models.test:8000/v1' }, [group('opencode')])).toEqual({
+      kind: 'compatible',
+      auth: null,
+    });
+    expect(detectProvider({}, [group('opencode')])).toEqual({ kind: 'unknown', auth: null });
   });
 });

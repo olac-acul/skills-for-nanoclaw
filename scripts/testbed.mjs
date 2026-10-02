@@ -43,11 +43,22 @@ function wire() {
   }
 }
 
+/** Upstream skills our code builds on (their payloads are what a real install has after applying them). */
+const UPSTREAM_PAYLOADS = ['add-opencode'];
+
+function syncUpstreamPayloads() {
+  for (const name of UPSTREAM_PAYLOADS) {
+    const payload = join(testbed, '.claude', 'skills', name, 'payload');
+    if (existsSync(payload)) cpSync(payload, testbed, { recursive: true });
+  }
+}
+
 function sync() {
   if (!existsSync(join(testbed, 'package.json'))) {
     console.error(`test bed not found at ${testbed} (set TESTBED)`);
     process.exit(2);
   }
+  syncUpstreamPayloads();
   for (const root of payloadRoots()) cpSync(root, testbed, { recursive: true });
   wire();
   console.log(`synced ${payloadRoots().length} payload(s) into ${testbed}`);
@@ -92,7 +103,7 @@ if (command === 'sync') {
 } else if (command === 'check') {
   sync();
   const targets = rest.length ? rest : DEFAULT_TARGETS;
-  const scriptConfigs = ['manager-backup', 'manager-panel'].filter((name) => existsSync(join(testbed, 'scripts', `tsconfig.${name}.json`)));
+  const scriptConfigs = ['manager-backup', 'manager-panel', 'manager-credentials'].filter((name) => existsSync(join(testbed, 'scripts', `tsconfig.${name}.json`)));
   const scriptFiles = ['manager-backup', 'manager-panel'].map((name) => `scripts/${name}.ts`).filter((file) => existsSync(join(testbed, file)));
   const failures = [
     run('tsc', ['--noEmit']),

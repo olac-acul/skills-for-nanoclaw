@@ -53,7 +53,17 @@ export interface Journal {
   groups: GroupModel[];
 }
 
+export interface CredentialPresence {
+  /** An Anthropic key or subscription token is stored in the gateway. */
+  claude: boolean;
+  /** An OpenAI API key is stored for OpenCode. */
+  openaiKey: boolean;
+  /** A ChatGPT subscription login is stored for OpenCode. */
+  chatgptLogin: boolean;
+}
+
 export interface ModelPorts {
+  credentials(): Promise<CredentialPresence>;
   readEnv(keys: readonly string[]): Record<string, string | null>;
   updateEnv(changes: Record<string, string | null>): Record<string, string | null>;
   listGroups(): Promise<GroupModel[]>;
@@ -91,6 +101,7 @@ export interface ModelStatus {
   model: string | null;
   smallModel: string | null;
   provider: string | null;
+  authMode: string | null;
   groups: Array<{ id: string; provider: string | null; model: string | null; followsSettings: boolean }>;
   /** A change was interrupted and has not been recovered yet. */
   interrupted: boolean;
@@ -105,6 +116,7 @@ export async function readModelStatus(ports: ModelPorts): Promise<ModelStatus> {
     model: env.OPENCODE_MODEL,
     smallModel: env.OPENCODE_SMALL_MODEL,
     provider: env.OPENCODE_PROVIDER,
+    authMode: env.OPENCODE_AUTH_MODE,
     groups: groups.map((group) => ({
       ...group,
       followsSettings: group.provider === 'opencode' && (!expected || group.model === expected),
@@ -267,4 +279,158 @@ export async function recoverModelChange(ports: ModelPorts): Promise<'none' | 'r
   const journal = ports.readJournal();
   if (!journal) return 'none';
   return (await rollbackFromJournal(ports, journal)) ? 'rolled-back' : 'incomplete';
+}
+
+// ---------------------------------------------------------------------------
+// Providers: an OpenAI-compatible endpoint, ChatGPT, or Claude
+// ---------------------------------------------------------------------------
+
+export type ProviderInput =
+  | { kind: 'compatible'; baseUrl: string; model: string; smallModel?: string }
+  | { kind: 'chatgpt'; auth: 'subscription' | 'api-key'; model: string; smallModel?: string }
+  | { kind: 'claude'; model?: string };
+
+export type ProviderKind = ProviderInput['kind'];
+
+function neededCredential(input: ProviderInput, presence: CredentialPresence): 'present' | 'missing' | 'not_needed' {
+  if (input.kind === 'compatible') return 'not_needed';
+  if (input.kind === 'claude') return presence.claude ? 'present' : 'missing';
+  return (input.auth === 'subscription' ? presence.chatgptLogin : presence.openaiKey) ? 'present' : 'missing';
+}
+
+export interface ProviderPreview {
+  ok: boolean;
+  reason: string | null;
+  models: string[];
+  contextLimit: number | null;
+  local: boolean | null;
+  smallModel: SmallModelCheck | 'not_checked';
+  credential: 'present' | 'missing' | 'not_needed';
+  groupsAffected: number;
+  restartsNeeded: number;
+}
+
+/** Check a provider choice and say what applying it would touch. Changes nothing. */
+export async function previewProviderChange(ports: ModelPorts, input: ProviderInput): Promise<ProviderPreview> {
+  const groups = await ports.listGroups();
+  const credential = neededCredential(input, await ports.credentials());
+  const base = { groupsAffected: groups.length, restartsNeeded: groups.length, credential };
+  if (input.kind === 'compatible') {
+    const preview = await previewModelChange(ports, input);
+    const smallMissing = preview.smallModel === 'not_found';
+    return {
+      ...base,
+      ok: preview.probe.reason === null && !smallMissing,
+      reason: preview.probe.reason ?? (smallMissing ? 'small_model_not_found' : null),
+      models: preview.probe.models,
+      contextLimit: preview.probe.contextLimit,
+      local: preview.probe.local, // privacy-scan: allow -- property name
+      smallModel: preview.smallModel,
+    };
+  }
+  if (input.kind === 'chatgpt' && !MODEL_ID.test(input.model))
+    throw new ModelSettingsError('invalid_input', 'a model name is required');
+  if (input.kind === 'claude' && input.model !== undefined && input.model !== '' && !MODEL_ID.test(input.model)) {
+    throw new ModelSettingsError('invalid_input', 'model ids may contain letters, digits and . _ : / @ + -');
+  }
+  // The key lives in the gateway and cannot be read back, so the model name itself cannot be checked here.
+  return {
+    ...base,
+    ok: credential === 'present',
+    reason: credential === 'present' ? null : 'credential_missing',
+    models: [],
+    contextLimit: null,
+    local: null,
+    smallModel: 'not_checked',
+  };
+}
+
+function envFor(input: ProviderInput, probe: ProbeResult | null): Record<string, string | null> {
+  if (input.kind === 'compatible') return targetEnv(normalise(input), probe as ProbeResult);
+  if (input.kind === 'chatgpt') {
+    const small = (input.smallModel ?? '').trim() || input.model;
+    return {
+      OPENCODE_PROVIDER: 'openai',
+      OPENCODE_BASE_URL: 'native',
+      OPENCODE_MODEL: `openai/${input.model}`,
+      OPENCODE_SMALL_MODEL: `openai/${small}`,
+      OPENCODE_AUTH_MODE: input.auth === 'subscription' ? 'chatgpt' : null,
+      OPENCODE_MODEL_CONTEXT_LIMIT: null,
+      OPENCODE_MODEL_OUTPUT_LIMIT: null,
+    };
+  }
+  return {}; // Claude does not use the OPENCODE_* settings; they are left as they are.
+}
+
+function groupValueFor(input: ProviderInput): { provider: string | null; model: string | null } {
+  if (input.kind === 'claude') return { provider: null, model: input.model?.trim() || null };
+  const model = input.kind === 'compatible' ? normalise(input).model : input.model.trim();
+  return { provider: 'opencode', model: `openai/${model}` };
+}
+
+/** Point every agent at the chosen provider. Same journal and rollback as an endpoint change. */
+export async function applyProviderChange(ports: ModelPorts, input: ProviderInput): Promise<ApplyOutcome> {
+  if (input.kind === 'compatible') return applyModelChange(ports, input);
+  if (ports.readJournal()) {
+    throw new ModelSettingsError('change_in_progress', 'a previous model change was interrupted; recover it first');
+  }
+  const preview = await previewProviderChange(ports, input);
+  if (!preview.ok)
+    throw new ModelSettingsError('probe_failed', 'the provider is not ready', preview.reason ?? 'credential_missing');
+
+  const target = groupValueFor(input);
+  const env = envFor(input, null);
+  const groups = await ports.listGroups();
+  const journal: Journal = {
+    startedAt: (ports.now?.() ?? new Date()).toISOString(),
+    env: ports.readEnv(MANAGED_ENV_KEYS),
+    groups,
+  };
+  ports.writeJournal(journal);
+  try {
+    if (Object.keys(env).length > 0) ports.updateEnv(env);
+    for (const group of groups) await ports.setGroup(group.id, target);
+
+    const after = await ports.listGroups();
+    if (after.some((group) => group.provider !== target.provider || group.model !== target.model))
+      throw new Error('a group was not updated');
+    if (env.OPENCODE_MODEL !== undefined && ports.readEnv(['OPENCODE_MODEL']).OPENCODE_MODEL !== env.OPENCODE_MODEL) {
+      throw new Error('the .env file does not contain the new settings');
+    }
+
+    const restartFailures: string[] = [];
+    for (const group of groups) {
+      try {
+        await ports.restartGroup(group.id);
+        // eslint-disable-next-line no-catch-all/no-catch-all -- a restart failure is reported to the caller, the change itself stands
+      } catch {
+        restartFailures.push(group.id);
+      }
+    }
+    ports.clearJournal();
+    return { groups: groups.length, restarted: groups.length - restartFailures.length, restartFailures };
+  } catch (error) {
+    const rolledBack = await rollbackFromJournal(ports, journal);
+    throw new ModelSettingsError(
+      rolledBack ? 'apply_failed_rolled_back' : 'apply_failed_rollback_incomplete',
+      rolledBack
+        ? 'the change failed and the previous settings were restored'
+        : 'the change failed and restoring the previous settings did not finish',
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+/** Which provider the install is set up for, judged from `.env` and the groups. */
+export function detectProvider(
+  env: Record<string, string | null>,
+  groups: GroupModel[],
+): { kind: ProviderKind | 'unknown'; auth: 'subscription' | 'api-key' | null } {
+  if (groups.length > 0 && groups.every((group) => group.provider === null || group.provider === 'claude'))
+    return { kind: 'claude', auth: null };
+  if (env.OPENCODE_PROVIDER === 'openai' && env.OPENCODE_BASE_URL === 'native') {
+    return { kind: 'chatgpt', auth: env.OPENCODE_AUTH_MODE === 'chatgpt' ? 'subscription' : 'api-key' };
+  }
+  if (env.OPENCODE_BASE_URL && env.OPENCODE_BASE_URL !== 'native') return { kind: 'compatible', auth: null };
+  return { kind: 'unknown', auth: null };
 }

@@ -27,7 +27,7 @@ export const INDEX_HTML = `<!doctype html>
     <header id="top" hidden>
       <strong>NanoClaw Manager</strong>
       <nav id="nav"></nav>
-      <a id="guide-link" class="help" href="/guide" target="_blank" rel="noopener">Guide</a>
+      <a id="guide-link" class="help" href="/guide">Guide</a>
       <button id="logout" type="button" class="link"></button>
     </header>
     <main id="main"><p class="muted">Loading…</p></main>
@@ -82,6 +82,11 @@ button.link { border: 0; background: none; color: var(--muted); }
 dialog { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); max-width: 520px; width: calc(100% - 32px); }
 dialog::backdrop { background: rgba(0,0,0,.45); }
 /* sign-in and first-run screens */
+.segments { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; margin: 4px 0 8px; }
+.segments button { border: 0; background: none; padding: 6px 12px; border-radius: 6px; color: var(--muted); }
+.segments button.on { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+.segments.small button { padding: 4px 10px; font-size: 14px; }
+.secret { display: grid; gap: 8px; margin: 12px 0; }
 .auth { min-height: calc(100vh - 96px); display: grid; place-items: center; }
 .auth-card { width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 32px 28px; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 12px 32px rgba(0,0,0,.12); }
 .auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; font-weight: 600; letter-spacing: .2px; }
@@ -149,8 +154,25 @@ var T = {
   cancel: 'Cancel', close: 'Close', loading: 'Loading…', none: 'Nothing here yet.',
   overview: { title: 'Overview', release: 'Release', agents: 'Agents', running: 'Running now', sessions: 'Sessions', gateway: 'Credential gateway', channels: 'Channels', providers: 'Providers', backups: 'Backups', latest: 'Latest', never: 'never', up: 'Uptime' },
   agents: { title: 'Agents', terminalNote: 'Adding, wiring and removing agents and channels is done from a terminal.', addHelp: 'How', rebuildHelp: 'Rebuild an agent image', name: 'Name', provider: 'Provider', model: 'Model', state: 'State', restart: 'Restart', running: 'running', idle: 'idle', restarted: 'Restart requested.' },
+  provider: {
+    in_use: 'Provider in use', choose: 'Choose a provider', moreAbout: 'More',
+    names: { compatible: 'OpenAI-compatible endpoint', chatgpt: 'ChatGPT', claude: 'Claude', unknown: 'Not set up yet' },
+    auth: { subscription: 'Subscription login', 'api-key': 'API key' },
+    blurb: {
+      compatible: 'A server that speaks the OpenAI API: a local model server, Ollama, or a hosted service. No key is needed for most local servers.',
+      chatgpt: 'OpenAI models through your ChatGPT subscription or an OpenAI API key. Agents use OpenCode.',
+      claude: 'Anthropic models through the Claude provider NanoClaw ships with, using an API key or a Claude subscription token.',
+    },
+    default_model: 'default', credential: 'Credential in the gateway', stored: 'stored', not_stored: 'not stored yet', save: 'Save', saved: 'Saved in the credential gateway.',
+    use_ollama: 'Use Ollama', ollama_hint: 'Fills the address Ollama has on this machine, then checks it.', models_found: 'Models offered',
+    openai_key: 'OpenAI API key', openai_key_help: 'Handed straight to the credential gateway and never shown again.',
+    claude_secret: 'Anthropic API key or Claude subscription token', claude_help: 'For a subscription, run claude setup-token in a terminal and paste the token it prints. Handed straight to the credential gateway and never shown again.',
+    claude_model: 'Model (optional)', claude_model_hint: 'empty = the provider default', chatgpt_model_hint: 'as named by OpenAI',
+    signin: 'Sign in with ChatGPT', signin_help: 'Shows a page and a code; you enter the code there while signed in to ChatGPT.', signin_steps: 'Open this page, sign in, and enter the code:', signin_starting: 'Starting the sign-in…',
+    agents_restarted: 'agents restarted.',
+  },
   model: {
-    title: 'Model', current: 'Current settings', baseUrl: 'Endpoint (OpenAI-compatible, ending in /v1)', model: 'Model', small: 'Small model (optional)', moreAbout: 'More', smallHelp: 'A lighter model OpenCode can use for minor background work. Leave it empty to use the main model for everything, which is right when you run a single model.',
+    title: 'Model and provider', current: 'Current settings', baseUrl: 'Endpoint (OpenAI-compatible, ending in /v1)', model: 'Model', small: 'Small model (optional)', moreAbout: 'More', smallHelp: 'A lighter model OpenCode can use for minor background work. Leave it empty to use the main model for everything, which is right when you run a single model.',
     check: 'Check endpoint', apply: 'Apply to all agents', follows: 'Uses the install settings', differs: 'Different from the install settings',
     keyNote: 'API keys are not entered here. An endpoint that needs one gets its key through a terminal.', keyHelp: 'How to store a key', applyHelp: 'What applying does', errorsHelp: 'Endpoint errors explained',
     checked: 'Endpoint checked.', applied: 'Applied.', affected: 'Agents that will be restarted', context: 'Context window', models: 'Models offered',
@@ -168,7 +190,9 @@ var T = {
     password_too_short: 'The password is too short.', password_too_long: 'The password is too long.', already_configured: 'An administrator already exists.',
     unauthenticated: 'Your session ended. Sign in again.', reauth_required: 'Confirm your password first.', rate_limited: 'Too many requests. Slow down.',
     agents_busy: 'Agents are still running. Try again later or back up anyway.', probe_failed: 'The endpoint did not pass its checks',
-    model_not_found: 'The endpoint does not list that model.', small_model_not_found: 'The endpoint does not list the small model.', endpoint_unreachable: 'Could not reach the endpoint.', endpoint_invalid: 'That is not a valid endpoint URL.',
+    model_not_found: 'The endpoint does not list that model.', credential_missing: 'Store the credential first.', invalid_secret: 'That does not look like a key or token.',
+    save_failed: 'The credential gateway did not accept it.', login_failed: 'The sign-in did not complete.', login_timeout: 'The sign-in took too long.', login_cancelled: 'The sign-in was cancelled.',
+    gateway_unavailable: 'The credential gateway is not reachable.', runtime_unavailable: 'Docker is not available.', script_missing: 'Provider credentials need the OpenCode and OneCLI skills installed.', script_failed: 'The credentials helper failed. Check the NanoClaw log.', small_model_not_found: 'The endpoint does not list the small model.', endpoint_unreachable: 'Could not reach the endpoint.', endpoint_invalid: 'That is not a valid endpoint URL.',
     endpoint_not_allowed: 'That address is not allowed.', endpoint_insecure: 'Plain HTTP is only accepted for local addresses; use HTTPS.',
     endpoint_unauthorized: 'The endpoint wants an API key.', endpoint_unresolvable: 'The name could not be resolved.', endpoint_tls_failed: 'The TLS certificate could not be verified.',
     endpoint_invalid_response: 'The endpoint did not answer like an OpenAI-compatible API.', inference_failed: 'The model did not answer a test request.',
@@ -194,7 +218,7 @@ function h(tag, attrs) {
   }
   return el;
 }
-function guide(anchor, label) { return h('a', { class: 'help', href: '/guide#' + anchor, target: '_blank', rel: 'noopener' }, label); }
+function guide(anchor, label) { return h('a', { class: 'help', href: '/guide#' + anchor }, label); }
 function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
 function show(node) { clear(main); main.appendChild(node); }
 function message(kind, text) { return h('div', { class: 'notice ' + kind, role: kind === 'error' ? 'alert' : 'status' }, text); }
@@ -305,49 +329,198 @@ function viewAgents() {
 }
 
 function viewModel() {
-  var out = h('div'); var box = h('div', { class: 'card' }, T.loading); var form = h('div', { class: 'card' });
-  show(h('div', {}, h('h1', {}, T.model.title), out, box, form));
-  var url = h('input', { type: 'url', required: true, placeholder: 'http://host:8000/v1', autocomplete: 'off', spellcheck: 'false' });
-  var model = h('input', { required: true, list: 'models', autocomplete: 'off', spellcheck: 'false' });
-  var small = h('input', { autocomplete: 'off', spellcheck: 'false' });
-  var list = h('datalist', { id: 'models' });
-  var result = h('div');
-  var checked = false;
-  function values() { return { baseUrl: url.value.trim(), model: model.value.trim(), smallModel: small.value.trim() || undefined }; }
-  function strip(v) { var o = {}; for (var k in v) if (v[k] !== undefined) o[k] = v[k]; return o; }
-  api('GET', '/model').then(function (m) {
-    clear(box);
-    if (m.interrupted) box.appendChild(message('error', T.model.interrupted));
-    box.appendChild(h('h2', {}, T.model.current));
-    box.appendChild(h('p', {}, h('span', { class: 'muted' }, T.model.baseUrl + ': '), m.base_url || '-'));
-    box.appendChild(h('p', {}, h('span', { class: 'muted' }, T.model.model + ': '), m.model || '-', ' ', h('span', { class: 'muted' }, '(' + T.model.small.replace(' (optional)', '') + ': ' + (m.small_model || '-') + ')')));
-    var rows = h('tbody');
-    m.groups.forEach(function (g) { rows.appendChild(h('tr', {}, h('td', {}, g.name), h('td', {}, g.provider || '-'), h('td', {}, g.model || '-'), h('td', {}, h('span', { class: 'pill ' + (g.follows_settings ? 'ok' : 'bad') }, g.follows_settings ? T.model.follows : T.model.differs)))); });
-    if (m.groups.length) box.appendChild(h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, T.agents.name), h('th', {}, T.agents.provider), h('th', {}, T.agents.model), h('th'))), rows));
-    if (m.base_url) url.value = m.base_url; if (m.model && m.model.indexOf('openai/') === 0) model.value = m.model.slice(7);
-    if (m.small_model && m.small_model.indexOf('openai/') === 0 && m.small_model !== m.model) small.value = m.small_model.slice(7);
-  }).catch(function (err) { clear(box); fail(box, err); });
+  var out = h('div'); var box = h('div', { class: 'card' }, T.loading); var chooser = h('div', { class: 'card' }); var panel = h('div');
+  show(h('div', {}, h('h1', {}, T.model.title), out, box, chooser, panel));
+  var info = { kind: 'unknown', auth: null, bridge: null };
+  var creds = null; // null: not offered (OpenCode / OneCLI skills missing) or not loaded
+  var choice = 'compatible';
 
-  var checkBtn = h('button', { type: 'button' }, T.model.check); var applyBtn = h('button', { class: 'primary', type: 'button', disabled: true }, T.model.apply);
-  checkBtn.onclick = function () {
-    clear(result); checked = false; applyBtn.disabled = true;
-    if (!url.reportValidity() || !model.reportValidity()) return;
-    api('POST', '/model/preflight', strip(values())).then(function (p) {
-      clear(list); p.models.forEach(function (id) { list.appendChild(h('option', { value: id })); });
-      if (!p.ok) return result.appendChild(message('error', (T.errors[p.reason] || p.reason) + ''));
-      checked = true; applyBtn.disabled = false;
-      result.appendChild(message('ok', T.model.checked + ' ' + T.model.affected + ': ' + p.restarts_needed + (p.context_limit ? '. ' + T.model.context + ': ' + p.context_limit : '') + '.'));
-    }).catch(function (err) { fail(result, err); });
-  };
-  applyBtn.onclick = function () {
-    if (!checked) return; clear(result); applyBtn.disabled = true;
-    ensureReauth().then(function () { return api('POST', '/model/apply', strip(values())); }).then(function (r) {
-      result.appendChild(message('ok', T.model.applied + ' ' + r.restarted + '/' + r.agents + ' agents restarted.')); viewModel();
-    }).catch(function (err) { applyBtn.disabled = false; fail(result, err); });
-  };
-  [url, model, small].forEach(function (el) { el.oninput = function () { checked = false; applyBtn.disabled = true; }; });
-  form.appendChild(h('form', { onsubmit: function (ev) { ev.preventDefault(); } }, h('label', {}, T.model.baseUrl, url), h('label', {}, T.model.model, model, list), h('label', {}, T.model.small, small), h('p', { class: 'hint' }, T.model.smallHelp, ' ', guide('the-small-model', T.model.moreAbout)),
-    h('p', { class: 'muted' }, T.model.keyNote, ' ', guide('api-keys', T.model.keyHelp)), h('div', { class: 'links' }, guide('how-a-model-change-works', T.model.applyHelp), guide('endpoint-checks-and-errors', T.model.errorsHelp)), result, h('div', { class: 'row' }, checkBtn, applyBtn)));
+  function loadCreds() {
+    return api('GET', '/credentials').then(function (c) { creds = c; }).catch(function () { creds = null; });
+  }
+  function pill(ok, yes, no) { return h('span', { class: 'pill ' + (ok ? 'ok' : 'bad') }, ok ? yes : no); }
+  function strip(v) { var o = {}; for (var k in v) if (v[k] !== undefined && v[k] !== '') o[k] = v[k]; return o; }
+
+  function loadStatus() {
+    return api('GET', '/model').then(function (m) {
+      info = { kind: m.kind, auth: m.auth, bridge: m.bridge_address };
+      clear(box);
+      if (m.interrupted) box.appendChild(message('error', T.model.interrupted));
+      box.appendChild(h('h2', {}, T.model.current));
+      box.appendChild(h('p', {}, h('span', { class: 'muted' }, T.provider.in_use + ': '), T.provider.names[m.kind] || T.provider.names.unknown, m.auth ? ' (' + T.provider.auth[m.auth] + ')' : ''));
+      if (m.kind === 'compatible') box.appendChild(h('p', {}, h('span', { class: 'muted' }, T.model.baseUrl + ': '), m.base_url || '-'));
+      box.appendChild(h('p', {}, h('span', { class: 'muted' }, T.model.model + ': '), m.kind === 'claude' ? (m.groups[0] && m.groups[0].model) || T.provider.default_model : m.model || '-'));
+      var rows = h('tbody');
+      m.groups.forEach(function (g) { rows.appendChild(h('tr', {}, h('td', {}, g.name), h('td', {}, g.provider || 'claude'), h('td', {}, g.model || '-'), h('td', {}, h('span', { class: 'pill ' + (g.follows_settings || m.kind === 'claude' ? 'ok' : 'bad') }, g.follows_settings || m.kind === 'claude' ? T.model.follows : T.model.differs)))); });
+      if (m.groups.length) box.appendChild(h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, T.agents.name), h('th', {}, T.agents.provider), h('th', {}, T.agents.model), h('th'))), rows));
+      return m;
+    });
+  }
+
+  function renderChooser() {
+    clear(chooser);
+    chooser.appendChild(h('h2', {}, T.provider.choose));
+    var row = h('div', { class: 'segments', role: 'tablist' });
+    ['compatible', 'chatgpt', 'claude'].forEach(function (kind) {
+      row.appendChild(h('button', { type: 'button', role: 'tab', 'aria-selected': choice === kind ? 'true' : 'false', class: choice === kind ? 'on' : '', onclick: function () { choice = kind; renderChooser(); renderPanel(); } }, T.provider.names[kind]));
+    });
+    chooser.appendChild(row);
+    chooser.appendChild(h('p', { class: 'muted' }, T.provider.blurb[choice]));
+  }
+
+  // ----- credential widgets -----
+  function secretForm(label, help, onSave, guideAnchor) {
+    var input = h('input', { type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: label });
+    var note = h('div');
+    var btn = h('button', { type: 'button' }, T.provider.save);
+    btn.onclick = function () {
+      clear(note);
+      if (!input.value.trim()) return;
+      btn.disabled = true;
+      ensureReauth().then(function () { return onSave(input.value.trim()); }).then(function () { input.value = ''; return loadCreds(); }).then(function () { note.appendChild(message('ok', T.provider.saved)); renderPanel(); })
+        .catch(function (err) { btn.disabled = false; fail(note, err); });
+    };
+    return h('div', { class: 'secret' }, h('label', {}, label, input), h('p', { class: 'hint' }, help, ' ', guide(guideAnchor, T.provider.moreAbout)), h('div', { class: 'row' }, btn), note);
+  }
+
+  function chatgptLoginWidget() {
+    var area = h('div'); var btn = h('button', { type: 'button' }, T.provider.signin);
+    function show_(state) {
+      clear(area);
+      if (state.state === 'waiting' && state.url) {
+        area.appendChild(h('div', { class: 'notice' }, T.provider.signin_steps, ' ', h('a', { href: state.url, target: '_blank', rel: 'noopener noreferrer' }, state.url),
+          h('div', { class: 'key' }, state.code || '')));
+        area.appendChild(h('button', { type: 'button', onclick: function () { api('DELETE', '/credentials/chatgpt/login').then(function () { show_({ state: 'idle' }); btn.disabled = false; }).catch(function () {}); } }, T.cancel));
+      } else if (state.state === 'waiting') {
+        area.appendChild(message('ok', T.provider.signin_starting));
+      } else if (state.state === 'error') {
+        area.appendChild(message('error', explain({ code: state.error || 'login_failed' })));
+        btn.disabled = false;
+      }
+    }
+    function poll() {
+      if (!document.body.contains(area)) return;
+      api('GET', '/credentials/chatgpt/login').then(function (state) {
+        if (state.state === 'done') { return loadCreds().then(function () { renderPanel(); }); }
+        show_(state);
+        if (state.state === 'waiting') setTimeout(poll, 2000); else btn.disabled = false;
+      }).catch(function () { setTimeout(poll, 4000); });
+    }
+    btn.onclick = function () {
+      btn.disabled = true; clear(area);
+      ensureReauth().then(function () { return api('POST', '/credentials/chatgpt/login'); }).then(function (state) { show_(state); setTimeout(poll, 1500); })
+        .catch(function (err) { btn.disabled = false; fail(area, err); });
+    };
+    return h('div', {}, h('p', { class: 'hint' }, T.provider.signin_help, ' ', guide('chatgpt', T.provider.moreAbout)), h('div', { class: 'row' }, btn), area);
+  }
+
+  function modelFields(opts) {
+    var model = h('input', { autocomplete: 'off', spellcheck: 'false', placeholder: opts.placeholder || '' });
+    var small = opts.small ? h('input', { autocomplete: 'off', spellcheck: 'false' }) : null;
+    return { model: model, small: small, nodes: [h('label', {}, opts.label, model)].concat(small ? [h('label', {}, T.model.small, small), h('p', { class: 'hint' }, T.model.smallHelp, ' ', guide('the-small-model', T.model.moreAbout))] : []) };
+  }
+
+  function applyRow(result, getBody, ready) {
+    var btn = h('button', { class: 'primary', type: 'button', disabled: !ready }, T.model.apply);
+    btn.onclick = function () {
+      clear(result); btn.disabled = true;
+      ensureReauth().then(function () { return api('POST', '/model/apply', getBody()); }).then(function (r) {
+        result.appendChild(message('ok', T.model.applied + ' ' + r.restarted + '/' + r.agents + ' ' + T.provider.agents_restarted));
+        return loadStatus();
+      }).catch(function (err) { btn.disabled = false; fail(result, err); });
+    };
+    return btn;
+  }
+
+  // ----- the three provider forms -----
+  function compatibleForm() {
+    var url = h('input', { type: 'url', required: true, placeholder: 'http://host:8000/v1', autocomplete: 'off', spellcheck: 'false' });
+    var model = h('input', { required: true, list: 'models', autocomplete: 'off', spellcheck: 'false' });
+    var small = h('input', { autocomplete: 'off', spellcheck: 'false' });
+    var list = h('datalist', { id: 'models' }); var result = h('div'); var checked = false;
+    var checkBtn = h('button', { type: 'button' }, T.model.check); var applyBtn = h('button', { class: 'primary', type: 'button', disabled: true }, T.model.apply);
+    function body() { return strip({ kind: 'compatible', baseUrl: url.value.trim(), model: model.value.trim(), smallModel: small.value.trim() }); }
+    function invalidate() { checked = false; applyBtn.disabled = true; }
+    fillFrom(url, model, small);
+    var ollama = h('button', { type: 'button', onclick: function () { url.value = 'http://' + (info.bridge || 'localhost') + ':11434/v1'; model.value = ''; invalidate(); clear(result); checkBtn.click(); } }, T.provider.use_ollama);
+    checkBtn.onclick = function () {
+      clear(result); invalidate();
+      if (!url.reportValidity()) return;
+      api('POST', '/model/preflight', Object.assign(body(), model.value.trim() ? {} : { model: 'x' })).then(function (p) {
+        clear(list); p.models.forEach(function (id) { list.appendChild(h('option', { value: id })); });
+        if (!model.value.trim()) { result.appendChild(message('ok', T.provider.models_found + ': ' + (p.models.join(', ') || '-'))); return; }
+        if (!p.ok) return result.appendChild(message('error', (T.errors[p.reason] || p.reason) + ''));
+        checked = true; applyBtn.disabled = false;
+        result.appendChild(message('ok', T.model.checked + ' ' + T.model.affected + ': ' + p.restarts_needed + (p.context_limit ? '. ' + T.model.context + ': ' + p.context_limit : '') + '.'));
+      }).catch(function (err) { fail(result, err); });
+    };
+    applyBtn.onclick = function () {
+      if (!checked) return; clear(result); applyBtn.disabled = true;
+      ensureReauth().then(function () { return api('POST', '/model/apply', body()); }).then(function (r) { result.appendChild(message('ok', T.model.applied + ' ' + r.restarted + '/' + r.agents + ' ' + T.provider.agents_restarted)); return loadStatus(); })
+        .catch(function (err) { applyBtn.disabled = false; fail(result, err); });
+    };
+    [url, model, small].forEach(function (el) { el.oninput = invalidate; });
+    return h('form', { onsubmit: function (ev) { ev.preventDefault(); } },
+      h('label', {}, T.model.baseUrl, url), h('div', { class: 'row' }, ollama, h('span', { class: 'hint' }, T.provider.ollama_hint, ' ', guide('ollama', T.model.moreAbout))),
+      h('label', {}, T.model.model, model, list), h('label', {}, T.model.small, small), h('p', { class: 'hint' }, T.model.smallHelp, ' ', guide('the-small-model', T.model.moreAbout)),
+      h('p', { class: 'muted' }, T.model.keyNote, ' ', guide('api-keys', T.model.keyHelp)), result, h('div', { class: 'row' }, checkBtn, applyBtn));
+  }
+  function fillFrom(url, model, small) {
+    api('GET', '/model').then(function (m) {
+      if (m.kind !== 'compatible') return;
+      if (m.base_url) url.value = m.base_url;
+      if (m.model && m.model.indexOf('openai/') === 0) model.value = m.model.slice(7);
+      if (m.small_model && m.small_model.indexOf('openai/') === 0 && m.small_model !== m.model) small.value = m.small_model.slice(7);
+    }).catch(function () {});
+  }
+
+  function chatgptForm() {
+    var auth = info.kind === 'chatgpt' && info.auth ? info.auth : 'subscription';
+    var result = h('div'); var fields = modelFields({ label: T.model.model, placeholder: T.provider.chatgpt_model_hint, small: true });
+    var wrap = h('div');
+    var authRow = h('div', { class: 'segments small' });
+    ['subscription', 'api-key'].forEach(function (a) {
+      authRow.appendChild(h('button', { type: 'button', class: auth === a ? 'on' : '', onclick: function () { auth = a; draw(); } }, T.provider.auth[a]));
+    });
+    function draw() {
+      clear(wrap); clear(authRow);
+      ['subscription', 'api-key'].forEach(function (a) { authRow.appendChild(h('button', { type: 'button', class: auth === a ? 'on' : '', onclick: function () { auth = a; draw(); } }, T.provider.auth[a])); });
+      var have = creds ? (auth === 'subscription' ? creds.chatgpt_login : creds.openai_key) : false;
+      wrap.appendChild(authRow);
+      if (!creds) { wrap.appendChild(message('error', explain({ code: 'script_missing' }))); return; }
+      wrap.appendChild(h('p', {}, T.provider.credential + ': ', pill(have, T.provider.stored, T.provider.not_stored)));
+      wrap.appendChild(auth === 'subscription' ? chatgptLoginWidget() : secretForm(T.provider.openai_key, T.provider.openai_key_help, function (v) { return api('POST', '/credentials/openai-key', { value: v }); }, 'chatgpt'));
+      fields.nodes.forEach(function (n) { wrap.appendChild(n); });
+      wrap.appendChild(result);
+      wrap.appendChild(h('div', { class: 'row' }, applyRow(result, function () { return strip({ kind: 'chatgpt', auth: auth, model: fields.model.value.trim(), smallModel: fields.small.value.trim() }); }, have)));
+    }
+    draw();
+    return wrap;
+  }
+
+  function claudeForm() {
+    var result = h('div'); var fields = modelFields({ label: T.provider.claude_model, placeholder: T.provider.claude_model_hint, small: false });
+    var wrap = h('div');
+    if (!creds) { wrap.appendChild(message('error', explain({ code: 'script_missing' }))); return wrap; }
+    wrap.appendChild(h('p', {}, T.provider.credential + ': ', pill(creds.claude, T.provider.stored, T.provider.not_stored)));
+    wrap.appendChild(secretForm(T.provider.claude_secret, T.provider.claude_help, function (v) { return api('POST', '/credentials/claude', { value: v }); }, 'claude'));
+    fields.nodes.forEach(function (n) { wrap.appendChild(n); });
+    wrap.appendChild(result);
+    wrap.appendChild(h('div', { class: 'row' }, applyRow(result, function () { return strip({ kind: 'claude', model: fields.model.value.trim() }); }, creds.claude)));
+    return wrap;
+  }
+
+  function renderPanel() {
+    clear(panel);
+    var form = choice === 'compatible' ? compatibleForm() : choice === 'chatgpt' ? chatgptForm() : claudeForm();
+    panel.appendChild(h('div', { class: 'card' }, form));
+    panel.appendChild(h('div', { class: 'links' }, guide('how-a-model-change-works', T.model.applyHelp), guide('endpoint-checks-and-errors', T.model.errorsHelp)));
+  }
+
+  Promise.all([loadStatus(), loadCreds()]).then(function (results) {
+    var kind = results[0].kind; choice = kind === 'chatgpt' || kind === 'claude' ? kind : 'compatible';
+    renderChooser(); renderPanel();
+  }).catch(function (err) { clear(box); fail(box, err); });
 }
 
 function viewBackups() {
@@ -393,7 +566,11 @@ function viewBackups() {
 }
 
 var views = { overview: viewOverview, agents: viewAgents, model: viewModel, backups: viewBackups };
-function go(name) { state.view = name; renderNav(); views[name](); }
+// The current page lives in the address (#model), so leaving for the guide and coming back lands on the same page.
+function fromHash() { var name = location.hash.replace('#', ''); return views[name] ? name : 'overview'; }
+function render(name) { state.view = name; renderNav(); views[name](); }
+function go(name) { if (location.hash === '#' + name) render(name); else location.hash = name; }
+window.addEventListener('hashchange', function () { if (state.csrf) render(fromHash()); });
 function renderNav() {
   var nav = document.getElementById('nav'); clear(nav);
   Object.keys(views).forEach(function (name) { nav.appendChild(h('button', { type: 'button', 'aria-current': state.view === name ? 'page' : false, onclick: function () { go(name); } }, T.nav[name])); });
@@ -403,7 +580,7 @@ function enter() {
   var local = ['localhost', '127.0.0.1', '[::1]'].indexOf(location.hostname) >= 0;
   var warn = state.insecure && !local;
   var banner = document.getElementById('banner'); banner.hidden = !warn; clear(banner); if (warn) { banner.appendChild(document.createTextNode(T.insecure)); banner.appendChild(guide('https-and-network-access', T.guide.insecureMore)); }
-  go(state.view);
+  render(fromHash());
 }
 function start() {
   state.csrf = null; document.getElementById('top').hidden = true;

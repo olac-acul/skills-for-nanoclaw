@@ -9,7 +9,16 @@ import { CryptoError } from '../manager-backup/crypto.js';
 import { BackupError } from '../manager-backup/service.js';
 import { AuthError, type Auth } from './auth.js';
 import type { PanelBackend } from './backend.js';
-import { ModelSettingsError, applyModelChange, previewModelChange, readModelStatus } from './model-settings.js';
+import { CredentialError } from './credentials.js';
+import { validSecret } from './credentials-protocol.js';
+import {
+  ModelSettingsError,
+  applyProviderChange,
+  detectProvider,
+  previewProviderChange,
+  readModelStatus,
+  type ProviderInput,
+} from './model-settings.js';
 import { publicId, resolveId } from './opaque-id.js';
 import type { Session } from './sessions.js';
 import type { PanelState } from './state.js';
@@ -81,6 +90,36 @@ async function loadAgent(ctx: RouteContext, given: string) {
   const found = resolveId(ctx.deps.state.idKey(), 'agent', agents, given);
   if (!found) throw new HttpError(404, 'not_found');
   return { found, agents };
+}
+
+/** The body of the model preflight and apply calls: an endpoint (the default), ChatGPT or Claude. */
+export function parseProviderBody(raw: unknown): ProviderInput {
+  const body = fields<{ kind?: string; auth?: string; baseUrl?: string; model?: string; smallModel?: string }>(raw, {
+    kind: { type: 'string', max: 20, optional: true },
+    auth: { type: 'string', max: 20, optional: true },
+    baseUrl: { type: 'string', max: 2048, optional: true },
+    model: { type: 'string', max: 200, optional: true },
+    smallModel: { type: 'string', max: 200, optional: true },
+  });
+  const kind = body.kind ?? 'compatible';
+  if (kind === 'compatible') {
+    if (!body.baseUrl) throw new InvalidBody('baseUrl');
+    if (!body.model) throw new InvalidBody('model');
+    return { kind, baseUrl: body.baseUrl, model: body.model, smallModel: body.smallModel };
+  }
+  if (kind === 'chatgpt') {
+    if (body.auth !== 'subscription' && body.auth !== 'api-key') throw new InvalidBody('auth');
+    if (!body.model) throw new InvalidBody('model');
+    return { kind, auth: body.auth, model: body.model, smallModel: body.smallModel };
+  }
+  if (kind === 'claude') return { kind, model: body.model };
+  throw new InvalidBody('kind');
+}
+
+function secretBody(raw: unknown): { value: string } {
+  const { value } = fields<{ value: string }>(raw, { value: { type: 'string', max: 1024 } });
+  if (!validSecret(value)) throw new InvalidBody('value');
+  return { value };
 }
 
 export function buildRoutes(): Route[] {
@@ -287,9 +326,16 @@ export function buildRoutes(): Route[] {
       const key = ctx.deps.state.idKey();
       const names = new Map((await ctx.deps.backend.agents()).map((a) => [a.id, a.name]));
       const status = await readModelStatus(ctx.deps.backend.model);
+      const detected = detectProvider(
+        { OPENCODE_PROVIDER: status.provider, OPENCODE_BASE_URL: status.baseUrl, OPENCODE_AUTH_MODE: status.authMode },
+        status.groups,
+      );
       return {
         status: 200,
         body: {
+          kind: detected.kind,
+          auth: detected.auth,
+          bridge_address: ctx.deps.backend.bridgeAddress(),
           provider: status.provider,
           base_url: status.baseUrl,
           model: status.model,
@@ -307,13 +353,6 @@ export function buildRoutes(): Route[] {
     },
   });
 
-  const modelBody = (raw: unknown): unknown =>
-    fields<{ baseUrl: string; model: string; smallModel?: string }>(raw, {
-      baseUrl: { type: 'string', max: 2048 },
-      model: { type: 'string', max: 200 },
-      smallModel: { type: 'string', max: 200, optional: true },
-    });
-
   add({
     name: 'model_preflight',
     method: 'POST',
@@ -321,22 +360,19 @@ export function buildRoutes(): Route[] {
     access: 'session',
     mutating: true,
     limit: 'probe',
-    parse: modelBody,
+    parse: parseProviderBody,
     run: async (ctx) => {
-      const preview = await previewModelChange(
-        ctx.deps.backend.model,
-        ctx.body as { baseUrl: string; model: string; smallModel?: string },
-      );
-      const smallMissing = preview.smallModel === 'not_found';
+      const preview = await previewProviderChange(ctx.deps.backend.model, ctx.body as ProviderInput);
       return {
         status: 200,
         body: {
-          ok: preview.probe.reason === null && !smallMissing,
-          reason: preview.probe.reason ?? (smallMissing ? 'small_model_not_found' : null),
+          ok: preview.ok,
+          reason: preview.reason,
+          credential: preview.credential,
           small_model: preview.smallModel,
-          models: preview.probe.models,
-          context_limit: preview.probe.contextLimit,
-          local: preview.probe.local, // privacy-scan: allow -- property name or synthetic test input
+          models: preview.models,
+          context_limit: preview.contextLimit,
+          local: preview.local, // privacy-scan: allow -- property name
           agents_affected: preview.groupsAffected,
           restarts_needed: preview.restartsNeeded,
         },
@@ -352,9 +388,9 @@ export function buildRoutes(): Route[] {
     mutating: true,
     reauth: true,
     limit: 'mutation',
-    parse: modelBody,
+    parse: parseProviderBody,
     run: async (ctx) => {
-      const outcome = await applyModelChange(ctx.deps.backend.model, ctx.body as { baseUrl: string; model: string });
+      const outcome = await applyProviderChange(ctx.deps.backend.model, ctx.body as ProviderInput);
       return {
         status: 200,
         body: {
@@ -363,6 +399,98 @@ export function buildRoutes(): Route[] {
           restart_failures: outcome.restartFailures.length,
         },
       };
+    },
+  });
+
+  add({
+    name: 'credentials',
+    method: 'GET',
+    pattern: /^\/api\/v1\/credentials$/,
+    access: 'session',
+    mutating: false,
+    limit: 'read',
+    parse: noBody,
+    run: async (ctx) => {
+      const status = await ctx.deps.backend.credentials.status();
+      return {
+        status: 200,
+        body: { claude: status.claude, openai_key: status.openaiKey, chatgpt_login: status.chatgptLogin },
+      };
+    },
+  });
+
+  // Secrets go in, never out: no response of these routes contains the value.
+  add({
+    name: 'credential_claude',
+    method: 'POST',
+    pattern: /^\/api\/v1\/credentials\/claude$/,
+    access: 'session',
+    mutating: true,
+    reauth: true,
+    limit: 'mutation',
+    parse: secretBody,
+    run: async (ctx) => {
+      await ctx.deps.backend.credentials.saveClaude((ctx.body as { value: string }).value);
+      return { status: 200, body: { saved: true } };
+    },
+  });
+
+  add({
+    name: 'credential_openai_key',
+    method: 'POST',
+    pattern: /^\/api\/v1\/credentials\/openai-key$/,
+    access: 'session',
+    mutating: true,
+    reauth: true,
+    limit: 'mutation',
+    parse: secretBody,
+    run: async (ctx) => {
+      await ctx.deps.backend.credentials.saveOpenAiKey((ctx.body as { value: string }).value);
+      return { status: 200, body: { saved: true } };
+    },
+  });
+
+  const loginBody = (state: { state: string; url?: string; code?: string; error?: string }): unknown => ({
+    state: state.state,
+    ...(state.url ? { url: state.url } : {}),
+    ...(state.code ? { code: state.code } : {}),
+    ...(state.error ? { error: state.error } : {}),
+  });
+
+  add({
+    name: 'chatgpt_login_start',
+    method: 'POST',
+    pattern: /^\/api\/v1\/credentials\/chatgpt\/login$/,
+    access: 'session',
+    mutating: true,
+    reauth: true,
+    limit: 'mutation',
+    parse: noBody,
+    run: async (ctx) => ({ status: 202, body: loginBody(ctx.deps.backend.credentials.startChatgptLogin()) }),
+  });
+
+  add({
+    name: 'chatgpt_login_state',
+    method: 'GET',
+    pattern: /^\/api\/v1\/credentials\/chatgpt\/login$/,
+    access: 'session',
+    mutating: false,
+    limit: 'read',
+    parse: noBody,
+    run: async (ctx) => ({ status: 200, body: loginBody(ctx.deps.backend.credentials.loginState()) }),
+  });
+
+  add({
+    name: 'chatgpt_login_cancel',
+    method: 'DELETE',
+    pattern: /^\/api\/v1\/credentials\/chatgpt\/login$/,
+    access: 'session',
+    mutating: true,
+    limit: 'mutation',
+    parse: noBody,
+    run: async (ctx) => {
+      ctx.deps.backend.credentials.cancelChatgptLogin();
+      return { status: 200, body: loginBody(ctx.deps.backend.credentials.loginState()) };
     },
   });
 
@@ -491,6 +619,16 @@ export function toHttpError(error: unknown): HttpError {
             ? 409
             : 500;
     return new HttpError(status, error.code, {}, error.detail);
+  }
+  if (error instanceof CredentialError) {
+    return new HttpError(
+      error.code === 'invalid_secret'
+        ? 400
+        : error.code === 'runtime_unavailable' || error.code === 'script_missing'
+          ? 503
+          : 502,
+      error.code,
+    );
   }
   if (error instanceof BackupError) {
     return new HttpError(

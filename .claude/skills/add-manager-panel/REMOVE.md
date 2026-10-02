@@ -20,11 +20,17 @@ Reverses everything the skill added. The panel's state in
    The files are:
 
 ```text files
+scripts/manager-credentials.ts
 scripts/manager-panel.ts
+scripts/tsconfig.manager-credentials.json
 scripts/tsconfig.manager-panel.json
 src/modules/manager-panel/auth.ts
 src/modules/manager-panel/backend.ts
 src/modules/manager-panel/config.ts
+src/modules/manager-panel/credentials-protocol.test.ts
+src/modules/manager-panel/credentials-protocol.ts
+src/modules/manager-panel/credentials.test.ts
+src/modules/manager-panel/credentials.ts
 src/modules/manager-panel/env-file.test.ts
 src/modules/manager-panel/env-file.ts
 src/modules/manager-panel/fixtures/fake-backend.ts

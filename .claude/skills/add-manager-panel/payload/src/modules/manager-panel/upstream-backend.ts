@@ -2,6 +2,7 @@
  * The real `PanelBackend`, backed by upstream NanoClaw internals. With
  * `index.ts` this is the only panel code that imports upstream modules.
  */
+import os from 'node:os';
 import path from 'node:path';
 
 import { restartAgentGroupContainers } from '../../container-restart.js';
@@ -16,6 +17,7 @@ import {
 import { getCodeVersion } from '../../upgrade-state.js';
 import { readInventory } from '../manager-backup/upstream-host.js';
 import type { AgentInfo, BackupPort, PanelBackend } from './backend.js';
+import type { CredentialsPort } from './credentials.js';
 import { readEnvKeys, updateEnvKeys } from './env-file.js';
 import { liveEndpointDeps, probeEndpoint } from './model-endpoint.js';
 import { JOURNAL_NAME, type GroupModel, type Journal, type ModelPorts } from './model-settings.js';
@@ -25,9 +27,12 @@ export interface UpstreamBackendOptions {
   projectRoot: string;
   state: PanelState;
   backups: BackupPort;
+  credentials: CredentialsPort;
 }
 
-export function createModelPorts(options: Pick<UpstreamBackendOptions, 'projectRoot' | 'state'>): ModelPorts {
+export function createModelPorts(
+  options: Pick<UpstreamBackendOptions, 'projectRoot' | 'state' | 'credentials'>,
+): ModelPorts {
   const envFile = path.join(options.projectRoot, '.env');
   return {
     readEnv: (keys) => readEnvKeys(envFile, keys),
@@ -47,6 +52,7 @@ export function createModelPorts(options: Pick<UpstreamBackendOptions, 'projectR
     async restartGroup(id) {
       await restartAgentGroupContainers(id, 'model settings changed from the panel');
     },
+    credentials: () => options.credentials.status(),
     probe: (baseUrl, model) => probeEndpoint(baseUrl, model, liveEndpointDeps()),
     readJournal: () => options.state.readDocument<Journal>(JOURNAL_NAME),
     writeJournal: (journal) => options.state.writeDocument(JOURNAL_NAME, journal),
@@ -102,6 +108,11 @@ export function createUpstreamBackend(options: UpstreamBackendOptions): PanelBac
       return rows.map((row) => ({ type: row.channel_type, chats: Number(row.chats) }));
     },
     model: createModelPorts(options),
+    credentials: options.credentials,
+    bridgeAddress() {
+      const bridge = os.networkInterfaces().docker0?.find((entry) => entry.family === 'IPv4');
+      return bridge?.address ?? null;
+    },
     backups: options.backups,
   };
 }

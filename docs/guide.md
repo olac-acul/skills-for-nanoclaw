@@ -218,6 +218,17 @@ Delete. See [Backups](#backups). Restoring is not offered here: see
 
 ## Models
 
+The **Model** page sets one provider for every agent. Three kinds are offered:
+
+| Provider | What it is | Credential |
+| --- | --- | --- |
+| **OpenAI-compatible endpoint** | Any server that speaks the OpenAI API: a local model server, [Ollama](#ollama), or a hosted service. Agents use OpenCode. | None for most local servers; a key for hosted ones ([API keys](#api-keys)) |
+| **[ChatGPT](#chatgpt)** | OpenAI models through your ChatGPT subscription or an OpenAI API key. Agents use OpenCode. | Subscription login or API key |
+| **[Claude](#claude)** | Anthropic models through the Claude provider NanoClaw ships with. | API key or Claude subscription token |
+
+Choosing a provider and pressing **Apply** changes every agent at once, with the same rollback as
+described in [How a model change works](#how-a-model-change-works). The page shows which provider is in use.
+
 ### Connecting an endpoint
 
 An endpoint is the base URL of an OpenAI-compatible API, ending in `/v1`, for example
@@ -250,28 +261,100 @@ the small model exists on the endpoint; a wrong name shows up when OpenCode firs
 
 ### API keys
 
-API keys are **not** entered in the panel and never appear in it. A keyless endpoint (typical for a
-local server) needs none. For an endpoint that requires a key, store the key in the credential gateway
-with upstream's tool, from a terminal on the machine:
+Model providers' keys and tokens are kept in the **credential gateway** (OneCLI), never in `.env` and
+never in a backup. There are two ways to put one there:
 
-```bash
-pnpm exec tsx setup/index.ts --step provider-auth opencode
-```
+- **In the panel.** On the ChatGPT and Claude forms, paste the key and press **Save**. The password is
+  asked again first. The value goes from your browser to the panel, to a helper process, to the
+  gateway, and is never shown or returned again. Saving again replaces the stored value and keeps the
+  agents' access to it.
+- **From a terminal**, with upstream's tool, which also covers keys for a hosted OpenAI-compatible
+  service:
 
-Choose the local or self-hosted option, enter the endpoint and, when asked, the key. Then use the
-panel's **Model** page as usual. A *401* result from **Check endpoint** (*the endpoint wants an API
-key*) means the key is missing or the endpoint is not the one the key was stored for.
+  ```bash
+  pnpm exec tsx setup/index.ts --step provider-auth opencode
+  ```
+
+  Choose the local or self-hosted option, enter the endpoint and, when asked, the key.
+
+> **Over plain HTTP a key crosses your network in clear text** when you paste it into the panel. The
+> panel warns about this on every page except localhost. Use localhost, an SSH tunnel or
+> [HTTPS](#https-and-network-access) when you enter secrets.
+
+Entering keys in the panel needs the OpenCode and OneCLI skills installed (`add-opencode`,
+`add-onecli`) because the helper that stores them is built on those. Without them the panel says so and
+simply does not offer ChatGPT or Claude credentials.
+
+A *401* result from **Check endpoint** (*the endpoint wants an API key*) means the key is missing or the
+endpoint is not the one the key was stored for.
+
+### Ollama
+
+[Ollama](https://ollama.com) runs models on your own machine and speaks the OpenAI API at
+`http://<address>:11434/v1`. The panel uses it as an OpenAI-compatible endpoint; no key is needed.
+
+1. Install Ollama and pull a model that supports tool calls, for example `ollama pull <model>`. Agents
+   use tools heavily, and models without reliable tool use do poorly.
+2. Make Ollama reachable **from the agent containers**. By default it listens on `127.0.0.1` only, which
+   a container cannot reach. Set `OLLAMA_HOST=0.0.0.0:11434` (or the Docker bridge address) in Ollama's
+   service environment and restart it.
+3. On the **Model** page choose *OpenAI-compatible endpoint* and press **Use Ollama**. It fills in the
+   Docker bridge address of this machine with port 11434 and checks it; the models you pulled appear
+   as suggestions in the **Model** field.
+4. Pick a model, **Check endpoint**, then **Apply to all agents**.
+
+NanoClaw's own skill for Ollama (`add-ollama-provider`) takes a different route: it points the Claude
+provider at Ollama's Anthropic-style API and edits each agent's container settings. The panel does not
+use it. The two should not be combined.
+
+### ChatGPT
+
+Agents reach OpenAI through OpenCode, with the credential injected by the gateway. Two ways to
+authenticate:
+
+- **Subscription login.** Press **Sign in with ChatGPT** (the password is asked again). The panel starts
+  OpenCode's device pairing in a short-lived container and shows a page and a code. Open the page, sign
+  in to ChatGPT there and enter the code. The panel waits up to 15 minutes and stores the login in the
+  gateway, which refreshes it by itself. **Cancel** stops the attempt.
+- **API key.** Paste an OpenAI API key and press **Save**.
+
+Then enter the **model name exactly as OpenAI names it**, optionally a small model, and press **Apply**.
+The panel cannot check the name: the credential lives in the gateway and cannot be read back to ask
+OpenAI. A wrong name shows up the first time an agent tries to use it.
+
+What Apply writes: `OPENCODE_PROVIDER=openai`, `OPENCODE_BASE_URL=native`, `OPENCODE_MODEL` and
+`OPENCODE_SMALL_MODEL` as `openai/<name>`, and for a subscription login `OPENCODE_AUTH_MODE=chatgpt`
+(removed for an API key). Any context limits from an earlier endpoint are removed.
+
+The sign-in needs Docker (it runs OpenCode in a container) and the agent image built with the OpenCode
+provider.
+
+### Claude
+
+This is the provider NanoClaw ships with (the Claude Agent SDK), not OpenCode. Its credential is an
+**Anthropic API key** or a **Claude subscription token**. For a subscription, run
+`claude setup-token` in a terminal, sign in as it asks, and paste the token it prints into the panel.
+**Save** stores it in the gateway as the secret named *Anthropic* for `api.anthropic.com`, replacing a
+previous one.
+
+Applying Claude sets every agent's provider back to the default (Claude) and, if you enter one, its
+model; leave the model empty to use the provider's default. The `OPENCODE_*` settings are left alone, so
+switching back to an endpoint later is one step.
+
+As with ChatGPT, the panel cannot check a model name against Anthropic.
 
 ### How a model change works
 
-Applying a change does this, in order:
+Applying a change (an endpoint, ChatGPT or Claude) does this, in order:
 
 1. Checks the endpoint again.
 2. Writes a **journal** with the previous `.env` values and every agent's previous provider and model.
-3. Writes `OPENCODE_PROVIDER`, `OPENCODE_BASE_URL`, `OPENCODE_MODEL`, `OPENCODE_SMALL_MODEL` and, when
-   the server reports its context window, `OPENCODE_MODEL_CONTEXT_LIMIT` and
-   `OPENCODE_MODEL_OUTPUT_LIMIT` (half the window, at most 4096) to `.env`.
-4. Sets every agent group's provider to `opencode` and its model to `openai/<model>`.
+3. Writes the `OPENCODE_*` settings to `.env`: for an endpoint, `OPENCODE_PROVIDER`, `OPENCODE_BASE_URL`,
+   `OPENCODE_MODEL`, `OPENCODE_SMALL_MODEL` and, when the server reports its context window,
+   `OPENCODE_MODEL_CONTEXT_LIMIT` and `OPENCODE_MODEL_OUTPUT_LIMIT` (half the window, at most 4096);
+   for ChatGPT the settings listed in [ChatGPT](#chatgpt); for Claude nothing.
+4. Sets every agent group's provider and model: `opencode` and `openai/<model>`, or the default
+   provider (Claude) with the model you gave.
 5. Verifies what was written, then restarts every agent.
 6. Deletes the journal.
 
@@ -427,7 +510,7 @@ folder as the NanoClaw user.
 | --- | --- |
 | Create the administrator, or get a new setup code | [Create the administrator](#create-the-administrator) |
 | Forgot the password, locked out, sign everyone out | [Forgotten password](#forgotten-password) |
-| Store or change a model provider's API key | [API keys](#api-keys) |
+| Store or change a model provider's API key (also possible in the panel) | [API keys](#api-keys) |
 | Restore a backup, roll back a restore | [Restoring a backup](#restoring-a-backup) |
 | Test a backup on another machine | [Rehearsal restore](#rehearsal-restore) |
 | Prune old backups | [Retention and pruning](#retention-and-pruning) |
@@ -524,6 +607,10 @@ are yours to delete.
 | Agents fail with *Missing key limit.output* | An old panel version wrote a context limit without an output limit; apply the model once more from the current panel. |
 | Agent answers nothing, container log says no `<message>` blocks | The model does not follow NanoClaw's reply format. Use a model that follows instructions. |
 | After a model change an agent still uses the old one | Its restart failed (look in the host log for *Failed to stop session*). Run *Restart* again, or `docker rm -f` the stuck container. |
+| *Provider credentials need the OpenCode and OneCLI skills installed* | The helper that stores keys is built on `add-opencode` and `add-onecli`. Install them, then apply the panel skill again. |
+| *The credential gateway is not reachable* | OneCLI is not running. Check it (`docker ps`) and the `ONECLI_URL` in `.env`. |
+| The ChatGPT sign-in shows no page and code | Docker is not available to the NanoClaw user, or the agent image is missing. Build it (`./container/build.sh build`) and retry. |
+| Apply says *credential_missing* | The credential for that provider is not stored yet. Save the key or sign in first. |
 | Restore refuses: *host_running* | NanoClaw is still running. Stop it first. |
 | Restore refuses: *backup_newer* | The backup was made by newer code. Update NanoClaw, then restore. |
 | Restore warns: *not installed on this host* | The backup used channels or a gateway this install lacks. Install those skills before starting. |
@@ -593,8 +680,11 @@ State-changing calls need the cookie, the `X-CSRF-Token` header and an `Origin` 
 | `GET /overview`, `GET /agents`, `GET /channels` | no | read |
 | `POST /agents/{id}/restart` | no | restart an agent |
 | `GET /model` | no | current model settings |
-| `POST /model/preflight` | no | check an endpoint |
-| `POST /model/apply` | yes | apply to all agents |
+| `POST /model/preflight` | no | check a provider choice (`kind`: `compatible`, `chatgpt` or `claude`) |
+| `POST /model/apply` | yes | apply it to all agents |
+| `GET /credentials` | no | which provider credentials are stored (booleans) |
+| `POST /credentials/claude`, `POST /credentials/openai-key` | yes | store a key or token; nothing is returned |
+| `POST`, `GET`, `DELETE /credentials/chatgpt/login` | start: yes | ChatGPT device sign-in: start, poll for page and code, cancel |
 | `GET /backups` | no | list |
 | `POST /backups` | yes | create; the response holds the key, once |
 | `POST /backups/{id}/verify` | no | verify with a key |
@@ -603,7 +693,9 @@ State-changing calls need the cookie, the `X-CSRF-Token` header and an `Origin` 
 
 ## Known limits
 
-- The Model page connects one OpenAI-compatible endpoint. Presets for ChatGPT, Claude and Ollama are not in the panel yet.
+- One provider for all agents; a different provider per agent is not offered.
+- The panel cannot check a ChatGPT or Claude model name, because the keys live in the gateway.
+- The ChatGPT sign-in and the Claude credential were tested against the real gateway and, for the sign-in, against OpenAI's real pairing page, but not completed with a real account.
 - Restoring and updating are terminal-only.
 - Credentials in the gateway are not part of backups.
 - The panel starts and stops with NanoClaw; it cannot start NanoClaw.

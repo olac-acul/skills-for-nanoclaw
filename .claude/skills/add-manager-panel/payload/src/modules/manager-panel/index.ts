@@ -18,6 +18,7 @@ import { log } from '../../log.js';
 import { BackupService } from '../manager-backup/service.js';
 import { countBusySessions, createUpstreamHost } from '../manager-backup/upstream-host.js';
 import { PANEL_ENV_KEYS, isLoopbackBind, parsePanelConfig } from './config.js';
+import { createCredentialsPort } from './credentials.js';
 import { recoverModelChange } from './model-settings.js';
 import { createPanelServer } from './server.js';
 import { PanelState } from './state.js';
@@ -39,7 +40,8 @@ export async function startManagerPanel(): Promise<void> {
     const state = new PanelState(path.join(DATA_DIR, 'manager-panel'));
     const host = createUpstreamHost({ db: getDb(), busyAgentCount: () => countBusySessions(DATA_DIR), projectRoot });
     const backups = new BackupService({ host, backupsDir: config.backupDir });
-    const backend = createUpstreamBackend({ projectRoot, state, backups });
+    const credentials = createCredentialsPort({ projectRoot });
+    const backend = createUpstreamBackend({ projectRoot, state, backups, credentials });
 
     const recovered = await recoverModelChange(backend.model);
     if (recovered !== 'none') log.warn('Recovered an interrupted model change', { outcome: recovered });
