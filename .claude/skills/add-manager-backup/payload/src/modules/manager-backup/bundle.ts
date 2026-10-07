@@ -71,6 +71,8 @@ export interface BundleManifest {
   source: { version: string; commit: string; tree: string; installSlug: string };
   db: DbDescription;
   installed: InstalledInventory;
+  /** Names of the credentials in the gateway when the backup was made (never values); absent when unknown. */
+  gatewayCredentials?: string[];
   contents: { entries: number; files: number; bytes: number };
   /** Paths (relative to their roots) of channel or machine credentials that are in the bundle. */
   identities: { machineIdentityIncluded: boolean };
@@ -82,6 +84,16 @@ export interface BundleManifest {
   consistency: 'cold' | 'quiescent' | 'best-effort';
   /** Human-readable list of what was deliberately left out. */
   excluded: string[];
+}
+
+async function namesOrNothing(host: BackupHost): Promise<{ gatewayCredentials?: string[] }> {
+  try {
+    const names = await host.gatewayCredentialNames?.();
+    return names ? { gatewayCredentials: names } : {};
+    // eslint-disable-next-line no-catch-all/no-catch-all -- the names are a convenience; a backup never fails for them
+  } catch {
+    return {};
+  }
 }
 
 export interface CreateBundleOptions {
@@ -292,6 +304,7 @@ export async function createBundle(options: CreateBundleOptions): Promise<Bundle
       source: { ...identity, installSlug: host.installSlug() },
       db: await host.describeDb(),
       installed: host.installed(),
+      ...(await namesOrNothing(host)),
       contents: {
         entries: items.length + 1,
         files: files.length + 1,
@@ -413,6 +426,11 @@ export function parseManifest(raw: unknown): BundleManifest {
     isRecord(raw.contents) &&
       ['entries', 'files', 'bytes'].every((k) => Number.isInteger((raw.contents as Record<string, unknown>)[k])),
     'contents',
+  );
+  need(
+    raw.gatewayCredentials === undefined ||
+      (Array.isArray(raw.gatewayCredentials) && raw.gatewayCredentials.every((name) => typeof name === 'string')),
+    'gatewayCredentials',
   );
   need(isRecord(raw.identities), 'identities');
   need(

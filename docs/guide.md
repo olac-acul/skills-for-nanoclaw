@@ -475,6 +475,14 @@ Facts to know:
 - A backup **older** than the installed code is restored, and NanoClaw applies the newer migrations at
   its next start. A backup **newer** than the installed code is refused: update NanoClaw first.
 - This install's own upgrade marker is kept, so the startup check does not trip.
+- **The gateway selection.** If this machine has no credential gateway selected in `.env` (an install
+  that did not finish its setup) and the backup's gateway skill is installed here, the restore sets
+  `NANOCLAW_GATEWAY_PROVIDER` to the backup's value and says so. A machine that already selects a
+  gateway keeps its own choice; if it differs from the backup's, the restore warns.
+- **Credentials to enter again.** Gateway credentials are not in a backup, but their **names** are
+  (never the values). The restore lists the ones this machine does not have yet, for example
+  `OpenCode openai, Anthropic`; enter them again in the panel (Model page) or with the gateway's own
+  tools. A backup made while the gateway could not be asked has no list.
 - Everything newer than the backup (messages, memory, tasks) is replaced. The rollback copy is the only
   way back.
 - Agent groups whose container image was customised are listed; rebuild them with
@@ -487,7 +495,9 @@ pnpm exec tsx scripts/manager-backup.ts commit <transaction>     # delete the ro
 pnpm exec tsx scripts/manager-backup.ts rollback <transaction>   # put everything back
 ```
 
-The transaction id is printed by `restore`. If the restore fails part way, it rolls itself back.
+The transaction id is printed by `restore`. If the restore fails part way, it rolls itself back. After
+`commit` or `rollback` only the last transaction's small journal stays in `.manager-backup-txn/`, so that
+repeating the command can say what already happened.
 
 ### Rehearsal restore
 

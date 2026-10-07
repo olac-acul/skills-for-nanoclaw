@@ -153,6 +153,10 @@ async function main(): Promise<void> {
       `Migrations to run on first start: ${plan.migrationsToRun.length ? plan.migrationsToRun.join(', ') : 'none'}`,
     );
     for (const warning of plan.warnings) console.log(`Warning: ${warning}`);
+    if (plan.credentialsToReenter.length)
+      console.log(
+        `Credentials to enter again in the gateway after the restore (they are not part of a backup): ${plan.credentialsToReenter.join(', ')}`,
+      );
     console.log(
       'Everything newer than this backup (messages, memory, tasks) will be replaced. A rollback copy is kept until you commit.',
     );
@@ -180,6 +184,8 @@ async function main(): Promise<void> {
       );
     if (result.keptEnvKeys.length)
       console.log(`Kept this machine's own settings in .env instead of the backup's: ${result.keptEnvKeys.join(', ')}`);
+    if (result.adoptedEnvKeys.length)
+      console.log(`This machine had none, so the backup's value was used for: ${result.adoptedEnvKeys.join(', ')}`);
     if (result.droppedEnvKeys.length)
       console.log(`Rehearsal dropped these .env keys: ${result.droppedEnvKeys.join(', ')}`);
     if (!result.upgradeMarkerPreserved)

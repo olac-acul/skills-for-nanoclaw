@@ -64,6 +64,8 @@ export interface RestorePlan {
   /** Same code version as the backup? */
   sameRelease: boolean;
   warnings: string[];
+  /** Gateway credentials the backup's machine had that this machine does not (names only): enter them again. */
+  credentialsToReenter: string[];
 }
 
 export interface RestoreOptions {
@@ -86,6 +88,8 @@ export interface RestoreResult {
   rebuildGroups: string[];
   /** `.env` keys kept from this machine instead of the backup (names only). */
   keptEnvKeys: string[];
+  /** `.env` settings added because this machine had none and the backup's is usable here (names only). */
+  adoptedEnvKeys: string[];
   /** `.env` keys dropped by rehearsal mode (names only). */
   droppedEnvKeys: string[];
   /** The previous `.env`, upgrade marker and state were kept for rollback. */
@@ -164,13 +168,29 @@ export async function planRestore(host: BackupHost, bundleFile: string, key: Buf
     ...manifest.installed.providers
       .filter((name) => !host.installed().providers.includes(name))
       .map((name) => `provider ${name}`),
-    ...(manifest.installed.gateway && manifest.installed.gateway !== host.installed().gateway
+    ...(manifest.installed.gateway && !host.installedGateways().includes(manifest.installed.gateway)
       ? [`gateway ${manifest.installed.gateway}`]
       : []),
   ];
   if (missing.length > 0)
     warnings.push(`not installed on this host: ${missing.join(', ')} (reinstall these skills before starting)`);
-  return { manifest, migrationsToRun, sameRelease: manifest.source.commit === identity.commit, warnings };
+  const selected = host.installed().gateway;
+  if (manifest.installed.gateway && selected && selected !== manifest.installed.gateway)
+    warnings.push(
+      `this machine uses the ${selected} gateway and the backup used ${manifest.installed.gateway}; ${selected} is kept`,
+    );
+  let credentialsToReenter = manifest.gatewayCredentials ?? [];
+  if (credentialsToReenter.length > 0) {
+    const here = new Set((await host.gatewayCredentialNames?.()) ?? []);
+    credentialsToReenter = credentialsToReenter.filter((name) => !here.has(name));
+  }
+  return {
+    manifest,
+    migrationsToRun,
+    sameRelease: manifest.source.commit === identity.commit,
+    warnings,
+    credentialsToReenter,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +227,10 @@ export function filterEnvForRehearsal(text: string): { kept: string; dropped: st
  * gateway that is not there.
  */
 const TARGET_OWNED_ENV = [/^ONECLI_/, /^NANOCLAW_GATEWAY_PROVIDER$/, /^PANEL_/, /^no_proxy$/i];
+
+export function isTargetOwnedEnv(key: string): boolean {
+  return TARGET_OWNED_ENV.some((pattern) => pattern.test(key));
+}
 
 function envKey(line: string): string | null {
   const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
@@ -450,6 +474,22 @@ export async function restoreBundle(options: RestoreOptions): Promise<RestoreRes
     );
     envText = merged.text;
 
+    // A machine that has no gateway selected yet (an install that did not finish its setup) takes the
+    // backup's choice when that gateway's skill is installed here; otherwise the host would not start.
+    const adoptedEnvKeys: string[] = [];
+    const backupGateway = plan.manifest.installed.gateway;
+    if (
+      backupGateway &&
+      host.installedGateways().includes(backupGateway) &&
+      !/^\s*(?:export\s+)?NANOCLAW_GATEWAY_PROVIDER\s*=/m.test(envText ?? '') &&
+      !process.env.NANOCLAW_GATEWAY_PROVIDER?.trim()
+    ) {
+      envText = `${(envText ?? '').replace(/\n*$/, '')}${envText ? '\n' : ''}NANOCLAW_GATEWAY_PROVIDER=${backupGateway}\n`;
+      adoptedEnvKeys.push('NANOCLAW_GATEWAY_PROVIDER');
+    }
+    // Names this machine's own settings replaced were not "dropped"; they are reported as kept.
+    droppedEnvKeys = droppedEnvKeys.filter((name) => !isTargetOwnedEnv(name));
+
     // 5. Swap. Children move; the roots themselves stay.
     for (const root of roots) {
       moveChildren(root.real, root.previous, TXN_DIR);
@@ -493,6 +533,7 @@ export async function restoreBundle(options: RestoreOptions): Promise<RestoreRes
       mode,
       rebuildGroups: fixups.rebuildGroups,
       keptEnvKeys: merged.kept,
+      adoptedEnvKeys,
       droppedEnvKeys,
       upgradeMarkerPreserved,
     };
@@ -538,6 +579,7 @@ export async function rollbackRestore(host: BackupHost, txn: string): Promise<vo
   journal.state = 'rolled-back';
   writeJournal(txnDir, journal);
   cleanupTransaction(journal, txnDir);
+  pruneFinishedJournals(host, txn);
 }
 
 /** Accept the restored state: delete what was kept for rollback. */
@@ -549,6 +591,24 @@ export async function commitRestore(host: BackupHost, txn: string): Promise<void
   journal.state = 'committed';
   writeJournal(txnDir, journal);
   cleanupTransaction(journal, txnDir);
+  pruneFinishedJournals(host, txn);
+}
+
+/** Older finished transactions leave nothing but their journal; keep only the latest one, which lets a repeated command say what happened. */
+function pruneFinishedJournals(host: BackupHost, keep: string): void {
+  const parent = path.join(host.projectRoot, TXN_DIR);
+  if (!fs.existsSync(parent)) return;
+  for (const name of fs.readdirSync(parent)) {
+    if (name === keep) continue;
+    try {
+      const journal = readJournal(path.join(parent, name));
+      if (journal.state === 'committed' || journal.state === 'rolled-back')
+        fs.rmSync(path.join(parent, name), { recursive: true, force: true });
+      // eslint-disable-next-line no-catch-all/no-catch-all -- a transaction that cannot be read is left alone
+    } catch {
+      /* not ours to delete */
+    }
+  }
 }
 
 function cleanupTransaction(journal: Journal, txnDir: string): void {

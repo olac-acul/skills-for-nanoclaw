@@ -5,6 +5,7 @@
  * barrel wiring). When upstream renames or moves something, this is where the
  * compatibility build breaks and where the fix goes.
  */
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,6 +29,38 @@ function barrelImports(file: string): string[] {
   const re = /^\s*import\s+['"]\.\/([a-z0-9-]+)(?:\/index)?\.js['"];?\s*$/gm;
   for (const match of fs.readFileSync(file, 'utf8').matchAll(re)) names.push(match[1]);
   return names;
+}
+
+/** Gateways whose skill is installed: the imports of `src/gateway-providers/installed.ts`. */
+export function readInstalledGateways(projectRoot: string): string[] {
+  return barrelImports(path.join(projectRoot, 'src/gateway-providers/installed.ts')).sort();
+}
+
+/** Names of the secrets in the OneCLI gateway, or null when the CLI is missing or the gateway is down. */
+export function listOneCliSecretNames(): Promise<string[] | null> {
+  const home = process.env.HOME || os.homedir();
+  const PATH = `${path.join(home, '.local', 'bin')}${path.delimiter}${process.env.PATH ?? ''}`;
+  return new Promise((resolve) => {
+    execFile(
+      'onecli',
+      ['secrets', 'list'],
+      { env: { ...process.env, PATH }, timeout: 8000, maxBuffer: 1 << 20 },
+      (error, stdout) => {
+        if (error) return resolve(null);
+        try {
+          const data = (JSON.parse(stdout) as { data?: Array<{ name?: unknown }> }).data;
+          resolve(
+            Array.isArray(data)
+              ? data.flatMap((entry) => (typeof entry.name === 'string' ? [entry.name] : [])).sort()
+              : null,
+          );
+          // eslint-disable-next-line no-catch-all/no-catch-all -- unreadable output simply means the names are unknown
+        } catch {
+          resolve(null);
+        }
+      },
+    );
+  });
 }
 
 export function readInventory(projectRoot: string): InstalledInventory {
@@ -105,6 +138,9 @@ export function createUpstreamHost(options: UpstreamHostOptions): BackupHost {
     identity: () => getCodeIdentity(projectRoot),
     installSlug: () => getInstallSlug(projectRoot),
     installed: () => readInventory(projectRoot),
+    installedGateways: () => readInstalledGateways(projectRoot),
+    gatewayCredentialNames: async () =>
+      readInventory(projectRoot).gateway === 'onecli' ? listOneCliSecretNames() : null,
     registeredMigrations: () => getRegisteredMigrations().map((migration) => migration.name),
     busyAgentCount: options.busyAgentCount,
     async describeDb(): Promise<DbDescription> {

@@ -74,16 +74,17 @@ over together with its key.
 | Full restore: the first machine's panel password works on the new one (rehearsal leaves the panel without an administrator, on purpose) | pass |
 | `commit` discards the rollback copy and the scratch directories | pass |
 
-Things to know (none needed a code change):
+Things found on the way, and what was done about them:
 
 - **Gateway selection.** If the first run of `add-onecli` fails ("OneCLI installer did not report its
-  URL") and is rerun, `NANOCLAW_GATEWAY_PROVIDER` may not end up in `.env`. A restore then warns
-  *not installed on this host: gateway onecli* and, because this machine's own settings win, does not
-  bring the backup's value over. Add `NANOCLAW_GATEWAY_PROVIDER=onecli` to `.env` before starting.
+  URL") and is rerun, `NANOCLAW_GATEWAY_PROVIDER` may not end up in `.env`. The restore used to report
+  the gateway as *not installed* and not bring the backup's value over. It now looks at the installed
+  gateway skill rather than the variable, and adopts the backup's selection when the machine has none.
+- **Credentials.** The manifest records the names of the gateway's credentials (not values) and the
+  restore lists those this machine lacks.
+- **Message wording.** `NO_PROXY` was printed both as kept and as dropped; names this machine's own
+  value replaced are no longer reported as dropped.
+- **Journals.** Finished transactions leave a small `journal.json`; only the latest is kept.
 - **Empty database.** Before the first start, the restore's pre-flight checks leave an empty
   `data/v2.db` behind; a rollback restores that state.
-- **Message wording.** In a rehearsal the `.env` summary prints `NO_PROXY` both as kept (this
-  machine's value) and as dropped (the backup's); the file keeps this machine's value.
-- After `commit` or `rollback`, a transaction's small `journal.json` stays in `.manager-backup-txn/` as a
-  record; the rollback copy and scratch directories are gone.
 - Credentials in the gateway are not part of a backup (decided): they have to be entered again.

@@ -42,6 +42,13 @@ export interface BackupHost {
   identity(): CodeIdentity;
   installSlug(): string;
   installed(): InstalledInventory;
+  /** Credential gateways whose skill is installed here, whether or not one is selected in `.env`. */
+  installedGateways(): string[];
+  /**
+   * Names (never values) of the credentials stored in the selected gateway, so a restore can say which
+   * ones to enter again. `null` when the gateway cannot be asked.
+   */
+  gatewayCredentialNames?: () => Promise<string[] | null>;
   /** Names of every migration the running code knows about (core and modules). */
   registeredMigrations(): string[];
   describeDb(): Promise<DbDescription>;

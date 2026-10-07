@@ -58,6 +58,7 @@ export function makeHost(
       gateway: 'onecli',
       driver: 'docker',
     }),
+    installedGateways: () => ['onecli'],
     registeredMigrations: () => registered,
     describeDb: async () => {
       const db = new Database(path.join(dataDir, 'v2.db'), { readonly: true });

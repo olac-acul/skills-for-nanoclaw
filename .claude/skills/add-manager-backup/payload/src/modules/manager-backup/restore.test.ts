@@ -81,6 +81,7 @@ describe('planRestore', () => {
         gateway: null,
         driver: 'docker',
       }),
+      installedGateways: () => [],
     });
     const plan = await planRestore(bare, bundleFile, key);
     expect(plan.warnings.join(' ')).toContain('channel telegram');
@@ -274,5 +275,91 @@ describe('filterEnvForRehearsal', () => {
     expect(kept).toContain('TZ=UTC');
     expect(kept).toContain('NANOCLAW_X=1');
     expect(dropped.sort()).toEqual(['NANOCLAW_SECRET', 'SLACK_BOT_TOKEN']);
+  });
+});
+
+describe('gateway selection and credentials', () => {
+  const withoutSelection = (host: typeof target.host) =>
+    makeHost(target.project, target.home, ['one', 'two'], {
+      installed: () => ({ ...host.installed(), gateway: null }),
+    });
+
+  it('does not call a gateway missing when its skill is installed but not selected', async () => {
+    const plan = await planRestore(withoutSelection(target.host), bundleFile, key);
+    expect(plan.warnings.join(' ')).not.toContain('gateway');
+  });
+
+  it('warns when this machine uses a different gateway than the backup', async () => {
+    const other = makeHost(target.project, target.home, ['one', 'two'], {
+      installed: () => ({ ...target.host.installed(), gateway: 'other-gw' }),
+      installedGateways: () => ['onecli', 'other-gw'],
+    });
+    const plan = await planRestore(other, bundleFile, key);
+    expect(plan.warnings.join(' ')).toContain('this machine uses the other-gw gateway');
+  });
+
+  it("adopts the backup's gateway when this machine has none selected and the skill is installed", async () => {
+    fs.writeFileSync(path.join(target.project, '.env'), 'ONECLI_URL=http://target-gateway.test:10254\n');
+    const result = await restoreBundle({ host: target.host, bundleFile, key, mode: 'full' });
+    const env = fs.readFileSync(path.join(target.project, '.env'), 'utf8');
+    expect(env).toContain('NANOCLAW_GATEWAY_PROVIDER=onecli');
+    expect(result.adoptedEnvKeys).toEqual(['NANOCLAW_GATEWAY_PROVIDER']);
+  });
+
+  it("does not adopt a gateway whose skill is not installed here, and never overrides this machine's choice", async () => {
+    fs.writeFileSync(path.join(target.project, '.env'), 'ONECLI_URL=http://target-gateway.test:10254\n');
+    const bare = makeHost(target.project, target.home, ['one', 'two'], { installedGateways: () => [] });
+    expect((await restoreBundle({ host: bare, bundleFile, key, mode: 'full' })).adoptedEnvKeys).toEqual([]);
+    expect(fs.readFileSync(path.join(target.project, '.env'), 'utf8')).not.toContain('NANOCLAW_GATEWAY_PROVIDER');
+  });
+
+  it("lists the credentials the backup's machine had and this one lacks, by name", async () => {
+    const names = (list: string[] | null) => async () => list;
+    const src = makeHost(source.project, source.home, ['one', 'two'], {
+      gatewayCredentialNames: names(['Anthropic', 'OpenCode openai']),
+    });
+    const file = path.join(tmp, 'bundles', 'named.mbk');
+    await createBundle({ host: src, key, destFile: file });
+    const here = makeHost(target.project, target.home, ['one', 'two'], {
+      gatewayCredentialNames: names(['Anthropic']),
+    });
+    expect((await planRestore(here, file, key)).credentialsToReenter).toEqual(['OpenCode openai']);
+    const unknown = makeHost(target.project, target.home, ['one', 'two'], { gatewayCredentialNames: names(null) });
+    expect((await planRestore(unknown, file, key)).credentialsToReenter).toEqual(['Anthropic', 'OpenCode openai']);
+    // A backup made without names (older bundle, gateway not asked) has nothing to list.
+    expect((await planRestore(here, bundleFile, key)).credentialsToReenter).toEqual([]);
+  });
+
+  it('never lets a failing gateway lookup break the backup', async () => {
+    const broken = makeHost(source.project, source.home, ['one', 'two'], {
+      gatewayCredentialNames: async () => {
+        throw new Error('gateway down');
+      },
+    });
+    const file = path.join(tmp, 'bundles', 'broken.mbk');
+    await expect(createBundle({ host: broken, key, destFile: file })).resolves.toBeDefined();
+  });
+});
+
+describe('rehearsal report', () => {
+  it("does not list as dropped a setting this machine's own value replaced", async () => {
+    fs.appendFileSync(path.join(source.project, '.env'), 'NO_PROXY=100.64.0.1\n');
+    fs.appendFileSync(path.join(target.project, '.env'), 'no_proxy=100.64.0.2\n');
+    const file = path.join(tmp, 'bundles', 'proxy.mbk');
+    await createBundle({ host: source.host, key, destFile: file });
+    const result = await restoreBundle({ host: target.host, bundleFile: file, key, mode: 'rehearsal' });
+    expect(result.droppedEnvKeys).not.toContain('NO_PROXY');
+    expect(result.keptEnvKeys).toContain('no_proxy');
+  });
+});
+
+describe('finished transactions', () => {
+  it('keeps only the latest journal, so a repeated command still gets a clear answer', async () => {
+    const first = await restoreBundle({ host: target.host, bundleFile, key, mode: 'full' });
+    await commitRestore(target.host, first.txn);
+    const second = await restoreBundle({ host: target.host, bundleFile, key, mode: 'full' });
+    await rollbackRestore(target.host, second.txn);
+    expect(fs.readdirSync(path.join(target.project, TXN_DIR))).toEqual([second.txn]);
+    await expect(commitRestore(target.host, second.txn)).rejects.toMatchObject({ code: 'nothing_to_roll_back' });
   });
 });
