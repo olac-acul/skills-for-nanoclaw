@@ -304,6 +304,16 @@ endpoint is not the one the key was stored for.
    as suggestions in the **Model** field.
 4. Pick a model, **Check endpoint**, then **Apply to all agents**.
 
+**Ollama on another machine.** Type its address in the **Endpoint** field instead of pressing **Use
+Ollama**: `http://<address>:11434/v1`, then **Check endpoint** and **Apply**. This is the usual setup
+with a GPU server. On that machine, make Ollama listen on a reachable address (`OLLAMA_HOST=0.0.0.0:11434`,
+or one interface's address) and allow port 11434 through its firewall. Ollama has no login, so expose it
+only on a network you trust, or put a reverse proxy with HTTPS and authentication in front. The panel
+accepts plain HTTP for private and local addresses and requires HTTPS for anything else. The agent
+containers reach the address through the credential gateway like any other endpoint; in a test, the check
+from one machine and a real agent request from its container both reached an Ollama on another machine
+this way.
+
 **Speed.** An agent's first request carries about 2,000 tokens of instructions. On a CPU-only machine a
 3-billion-parameter model reads them at roughly 40 tokens a second, so even a small model needs a minute
 or more before it starts to answer, and more again to write the reply. A GPU, or a hosted endpoint, is
