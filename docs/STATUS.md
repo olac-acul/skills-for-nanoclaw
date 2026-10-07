@@ -52,8 +52,9 @@ Docker Compose stack of our own and no channels preconfigured:
 
 ## Next
 
-- [ ] Restore onto a second machine (rehearsal mode on real data), a real channel, and a
-      reproduction of the restart-after-adoption failure.
+- [ ] Restore onto a second machine (rehearsal mode on real data) and a real channel.
+- [x] The restart failure was reproduced and explained (Spike 6, upstream race on
+      `docker rm` of an auto-removed container). Reporting it upstream is pending approval.
 - [ ] Look at the panel UI in a real browser (the Chrome extension was not connected
       in the last session; `spikes/panel-dev.ts` in the test bed serves the real
       panel with fake data on 127.0.0.1:3299). Only static checks cover the UI script so far.

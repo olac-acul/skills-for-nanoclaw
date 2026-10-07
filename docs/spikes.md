@@ -110,3 +110,28 @@ and runs the build and test steps it declares. `add-manager-backup` applies with
 5 steps, no agent bounces, and 71 passing tests against upstream `main` at
 `d249c0fb`. Lessons: a `capture:` only works on `effect:refresh`; a precondition
 gate should be `effect:check` (exit code, no capture).
+
+## Spike 6: "Session teardown incomplete" on every container restart (upstream)
+
+Seen on the test install (upstream 2.4.0): every restart of an agent's container, whether from the
+panel's *Apply* or from `ncl groups restart`, logs
+
+```
+ERROR Failed to stop session ... err={ message: "session realization failed: unknown" ... }
+      at #confirmRemoved (drivers/docker-driver) <- DockerHandle.stop <- killContainer
+ERROR Session teardown incomplete; retaining its claim and gateway lease
+```
+
+Cause, reproduced by hand: agent containers are created with `AutoRemove=true`. `DockerHandle.stop()`
+runs `docker stop`, which already starts the automatic removal, then `docker rm --force`, which
+fails with *removal of container ... is already in progress* (exit 1). `#confirmRemoved()` then
+lists the container, still present for a moment, and throws instead of treating it as gone.
+Docker's events confirm the sequence (`kill, stop, die, destroy`).
+
+Effect: the container is gone and the next message starts a new one normally, so nothing visibly
+breaks; the host keeps the session's claim and gateway lease and logs an error each time. The
+panel's restart count is not affected (it reports the restart as done).
+
+It is an upstream issue and independent of these skills. Possible fix there: treat "already in
+progress" as success, or re-check with a short retry before throwing. Not reported upstream yet;
+that needs the repository owner's go-ahead.
