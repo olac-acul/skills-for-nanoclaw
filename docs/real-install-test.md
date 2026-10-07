@@ -54,4 +54,34 @@ to end with a mock OpenAI-compatible server.
   system prompt. Not a skill problem.
 - OneCLI's installer did not report its URL on the first run from the skill engine and worked on
   the second (the images had not been pulled yet). Rerun if it happens.
-- Restoring onto a second machine, and a stack with a real channel, are not tested.
+- A stack with a real channel is not tested.
+
+## Second machine (2026-10-07)
+
+A second clean Debian 13 LXC (same specs), set up exactly like the first: Docker, Node 22, Bun 1.4.0,
+upstream `d249c0fb`, then `add-onecli`, `add-opencode` and both skills from this repo, applied with
+upstream's engine. The install path is the same, so the install slug (and with it the container,
+image and backup folder names) is the same. A hot backup (`quiescent`) of the first machine was copied
+over together with its key.
+
+| Check | Result |
+| --- | --- |
+| Rehearsal restore on the new machine: warns about what is missing, keeps this machine's `ONECLI_URL` / `NO_PROXY`, drops what could act as the original | pass |
+| Central database rows match the first machine (agent groups, sessions, users, messaging groups, agents, container configs, schema version 23); host leases and session claims are cleared by design | pass |
+| Session mailboxes match (14 inbound, 13 outbound messages); only the test chats sent afterwards are new | pass |
+| The restored session resumes and the agent answers through the gateway and the model server | pass |
+| `rollback` puts the previous state back and removes the transaction folder | pass |
+| Full restore: the first machine's panel password works on the new one (rehearsal leaves the panel without an administrator, on purpose) | pass |
+| `commit` discards the rollback copy and the scratch directories | pass |
+
+Things to know (none needed a code change):
+
+- **Gateway selection.** If the first run of `add-onecli` fails ("OneCLI installer did not report its
+  URL") and is rerun, `NANOCLAW_GATEWAY_PROVIDER` may not end up in `.env`. A restore then warns
+  *not installed on this host: gateway onecli* and, because this machine's own settings win, does not
+  bring the backup's value over. Add `NANOCLAW_GATEWAY_PROVIDER=onecli` to `.env` before starting.
+- **Empty database.** Before the first start, the restore's pre-flight checks leave an empty
+  `data/v2.db` behind; a rollback restores that state.
+- **Message wording.** In a rehearsal the `.env` summary prints `NO_PROXY` both as kept (this
+  machine's value) and as dropped (the backup's); the file keeps this machine's value.
+- Credentials in the gateway are not part of a backup (decided): they have to be entered again.

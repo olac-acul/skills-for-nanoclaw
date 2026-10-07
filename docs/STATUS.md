@@ -52,7 +52,8 @@ Docker Compose stack of our own and no channels preconfigured:
 
 ## Next
 
-- [ ] Restore onto a second machine (rehearsal mode on real data) and a real channel.
+- [x] Restore onto a second machine (rehearsal, rollback, full restore): done, see docs/real-install-test.md.
+- [ ] A stack with a real channel (restore with a channel's credentials).
 - [x] The restart failure was reproduced and explained (Spike 6, upstream race on
       `docker rm` of an auto-removed container). Reporting it upstream is pending approval.
 - [ ] Look at the panel UI in a real browser (the Chrome extension was not connected
