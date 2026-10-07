@@ -296,12 +296,25 @@ endpoint is not the one the key was stored for.
 1. Install Ollama and pull a model that supports tool calls, for example `ollama pull <model>`. Agents
    use tools heavily, and models without reliable tool use do poorly.
 2. Make Ollama reachable **from the agent containers**. By default it listens on `127.0.0.1` only, which
-   a container cannot reach. Set `OLLAMA_HOST=0.0.0.0:11434` (or the Docker bridge address) in Ollama's
-   service environment and restart it.
+   a container cannot reach. Set `OLLAMA_HOST=<bridge address>:11434` in Ollama's service environment and restart it (the
+   Docker bridge address is what **Use Ollama** shows; `0.0.0.0` also works but opens the port to your
+   network). Remember to set the same `OLLAMA_HOST` when you run `ollama pull`.
 3. On the **Model** page choose *OpenAI-compatible endpoint* and press **Use Ollama**. It fills in the
    Docker bridge address of this machine with port 11434 and checks it; the models you pulled appear
    as suggestions in the **Model** field.
 4. Pick a model, **Check endpoint**, then **Apply to all agents**.
+
+**Speed.** An agent's first request carries about 2,000 tokens of instructions. On a CPU-only machine a
+3-billion-parameter model reads them at roughly 40 tokens a second, so even a small model needs a minute
+or more before it starts to answer, and more again to write the reply. A GPU, or a hosted endpoint, is
+the practical choice for day-to-day use. The first **Check endpoint** can also be slow, because the model
+is loaded into memory by that first request; for a model on this machine the panel waits up to two
+minutes for it.
+
+**Context window.** Ollama's default window is 4,096 tokens (`OLLAMA_CONTEXT_LENGTH` in its service
+environment raises it). Agents with long conversations or many tools need more; if answers stop
+following the instructions, raise it. Ollama does not report the window to the panel, so the panel
+leaves the context limits unset for it.
 
 NanoClaw's own skill for Ollama (`add-ollama-provider`) takes a different route: it points the Claude
 provider at Ollama's Anthropic-style API and edits each agent's container settings. The panel does not

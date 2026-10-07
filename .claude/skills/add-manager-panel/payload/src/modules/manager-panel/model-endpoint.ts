@@ -211,7 +211,12 @@ export async function probeEndpoint(
   raw: string,
   model: string | null,
   deps: EndpointDeps,
-  timeouts = { list: 5_000, inference: 12_000 },
+  // A model on this machine is loaded into memory by its first request, which can take a minute.
+  timeouts: { list: number; inference: number; localInference?: number } = {
+    list: 5_000,
+    inference: 12_000,
+    localInference: 120_000,
+  },
 ): Promise<ProbeResult> {
   const checked = await checkEndpoint(raw, deps);
   if (!checked.ok) return { reason: checked.reason, models: [], contextLimit: null, local: false };
@@ -242,7 +247,7 @@ export async function probeEndpoint(
   try {
     const answer = await deps.request(join(checked.url, '/chat/completions'), checked.address, checked.family, {
       method: 'POST',
-      timeoutMs: timeouts.inference,
+      timeoutMs: checked.local ? (timeouts.localInference ?? timeouts.inference) : timeouts.inference, // privacy-scan: allow -- property name
       body: JSON.stringify({
         model,
         messages: [{ role: 'user', content: 'Reply with OK.' }],

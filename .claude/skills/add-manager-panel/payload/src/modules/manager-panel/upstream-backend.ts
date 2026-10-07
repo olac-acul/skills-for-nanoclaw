@@ -2,9 +2,11 @@
  * The real `PanelBackend`, backed by upstream NanoClaw internals. With
  * `index.ts` this is the only panel code that imports upstream modules.
  */
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 
+import { CONTAINER_RUNTIME_BIN } from '../../container-runtime.js';
 import { restartAgentGroupContainers } from '../../container-restart.js';
 import { isContainerRunning } from '../../container-runner.js';
 import { getDb } from '../../db/connection.js';
@@ -22,6 +24,32 @@ import { readEnvKeys, updateEnvKeys } from './env-file.js';
 import { liveEndpointDeps, probeEndpoint } from './model-endpoint.js';
 import { JOURNAL_NAME, type GroupModel, type Journal, type ModelPorts } from './model-settings.js';
 import type { PanelState } from './state.js';
+
+/** The first IPv4 gateway in the output of `docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}} {{end}}'`. */
+export function parseBridgeGateway(output: string): string | null {
+  const match = output.split(/\s+/).find((word) => /^(?:\d{1,3}\.){3}\d{1,3}$/.test(word));
+  return match ?? null;
+}
+
+/**
+ * Where agent containers reach this machine: the address of the Docker bridge. The interface is
+ * only listed while it is up (a container is running), so Docker is asked when it is not.
+ */
+function findBridgeAddress(): string | null {
+  const bridge = os.networkInterfaces().docker0?.find((entry) => entry.family === 'IPv4');
+  if (bridge) return bridge.address;
+  try {
+    const out = execFileSync(
+      CONTAINER_RUNTIME_BIN,
+      ['network', 'inspect', 'bridge', '--format', '{{range .IPAM.Config}}{{.Gateway}} {{end}}'],
+      { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    return parseBridgeGateway(out);
+    // eslint-disable-next-line no-catch-all/no-catch-all -- no Docker, or it is down: the address is simply unknown
+  } catch {
+    return null;
+  }
+}
 
 export interface UpstreamBackendOptions {
   projectRoot: string;
@@ -59,6 +87,8 @@ export function createModelPorts(
     clearJournal: () => options.state.removeDocument(JOURNAL_NAME),
   };
 }
+
+let bridgeCache: string | null = null;
 
 export function createUpstreamBackend(options: UpstreamBackendOptions): PanelBackend {
   const startedAt = Date.now();
@@ -109,10 +139,7 @@ export function createUpstreamBackend(options: UpstreamBackendOptions): PanelBac
     },
     model: createModelPorts(options),
     credentials: options.credentials,
-    bridgeAddress() {
-      const bridge = os.networkInterfaces().docker0?.find((entry) => entry.family === 'IPv4');
-      return bridge?.address ?? null;
-    },
+    bridgeAddress: () => (bridgeCache ??= findBridgeAddress()),
     backups: options.backups,
   };
 }

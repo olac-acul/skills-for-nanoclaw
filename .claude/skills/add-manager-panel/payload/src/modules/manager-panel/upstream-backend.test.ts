@@ -30,7 +30,7 @@ import { createUpstreamHost } from '../manager-backup/upstream-host.js';
 import { generateSetupCode } from './password.js';
 import { createPanelServer } from './server.js';
 import { PanelState } from './state.js';
-import { createUpstreamBackend } from './upstream-backend.js';
+import { createUpstreamBackend, parseBridgeGateway } from './upstream-backend.js';
 import type { ProbeResult } from './model-endpoint.js';
 
 const PASSWORD = 'correct horse battery staple';
@@ -194,5 +194,16 @@ describe('panel on a real install', () => {
     const result = await verifyBundle(copy, parseKey(key));
     expect(result.manifest.db.counts).toMatchObject({ agent_groups: 2 });
     expect(result.manifest.id).toBe(backup.id);
+  });
+});
+
+describe('parseBridgeGateway', () => {
+  it('reads the gateway of the default bridge network', () => {
+    expect(parseBridgeGateway('100.64.0.1 ')).toBe('100.64.0.1');
+    expect(parseBridgeGateway('fd00::1 100.64.0.2 \n')).toBe('100.64.0.2');
+  });
+  it('is null for empty or unusable output', () => {
+    expect(parseBridgeGateway('')).toBeNull();
+    expect(parseBridgeGateway('<no value>')).toBeNull();
   });
 });

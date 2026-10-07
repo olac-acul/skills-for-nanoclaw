@@ -136,6 +136,20 @@ describe('probeEndpoint', () => {
     });
   });
 
+  it('waits longer for the first answer of a model on this machine, which has to load into memory', async () => {
+    const waits: Record<string, number> = {};
+    const request: ProbeRequest = async (target, _address, _family, init) => {
+      if (target.pathname.endsWith('/chat/completions')) waits[target.host] = init.timeoutMs;
+      return target.pathname.endsWith('/models')
+        ? { status: 200, body: { data: [{ id: 'a' }] } }
+        : { status: 200, body: { choices: [{}] } };
+    };
+    await probeEndpoint('http://models.test/v1', 'a', deps(table, request));
+    await probeEndpoint('https://api.test/v1', 'a', deps({ ...table, 'api.test': [ip(8, 8, 4, 4)] }, request));
+    expect(waits['models.test']).toBe(120_000);
+    expect(waits['api.test']).toBe(12_000);
+  });
+
   it.each([
     ['unknown model', { '/v1/models': { status: 200, body: { data: [{ id: 'a' }] } } }, 'zzz', 'model_not_found'],
     ['unauthorized', { '/v1/models': { status: 401, body: null } }, 'a', 'endpoint_unauthorized'],
