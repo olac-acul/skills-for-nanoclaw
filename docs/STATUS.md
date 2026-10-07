@@ -60,3 +60,15 @@ Docker Compose stack of our own and no channels preconfigured:
 - [ ] Gateway state: decide per the "re-enter credentials" decision; document the
       reinstall checklist printed after a restore.
 - [ ] Restore on a different machine from a real install (needs Docker host).
+
+## Later (after the items above are done)
+
+- [ ] **Phone-friendly panel, installable as a web app.** Make the UI comfortable on a smartphone
+      so it can be saved to the home screen and used to manage NanoClaw from the phone. Scope to
+      decide when we get there: responsive layout (navigation, tables, forms, dialogs at phone
+      width; touch-sized controls), a web app manifest and icons, and a standalone display mode.
+      Keep it compatible with the strict CSP (no inline scripts; the manifest and icons are served
+      by the panel itself). A service worker is optional: offline use makes little sense for an
+      admin panel, and caching authenticated pages is a risk, so default to none. Note that
+      installing as an app usually needs HTTPS (or localhost) on the phone, so this ties in with
+      the optional HTTPS setup; plain HTTP on the LAN may only allow a home-screen shortcut.

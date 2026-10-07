@@ -113,6 +113,7 @@ beforeEach(async () => {
     status: async () => ({ claude: false, openaiKey: false, chatgptLogin: false }),
     saveClaude: async () => undefined,
     saveOpenAiKey: async () => undefined,
+    removeCredential: async () => undefined,
     startChatgptLogin: () => ({ state: 'idle' as const }),
     loginState: () => ({ state: 'idle' as const }),
     cancelChatgptLogin: () => undefined,

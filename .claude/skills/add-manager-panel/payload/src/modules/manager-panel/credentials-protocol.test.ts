@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   encodeEvent,
   findAnthropicSecret,
+  findSecretByName,
+  isCredentialKind,
   parseDeviceOutput,
   parseEvents,
   stripAnsi,
@@ -92,5 +94,27 @@ describe('events', () => {
       { type: 'error', code: 'script_failed' },
       { type: 'done' },
     ]);
+  });
+});
+
+describe('findSecretByName', () => {
+  const list = JSON.stringify({
+    data: [
+      { id: 'k1', name: 'OpenCode openai', type: 'generic' },
+      { id: 'c1', name: 'OpenCode ChatGPT', type: 'openai' },
+    ],
+  });
+  it('matches the exact name only', () => {
+    expect(findSecretByName(list, 'OpenCode openai')).toEqual({ id: 'k1' });
+    expect(findSecretByName(list, 'OpenCode ChatGPT')).toEqual({ id: 'c1' });
+    expect(findSecretByName(list, 'OpenCode')).toBeNull();
+    expect(findSecretByName(JSON.stringify({}), 'OpenCode openai')).toBeNull();
+  });
+});
+
+describe('isCredentialKind', () => {
+  it('accepts the three kinds and nothing else', () => {
+    for (const kind of ['claude', 'openai-key', 'chatgpt-login']) expect(isCredentialKind(kind)).toBe(true);
+    for (const kind of ['', 'chatgpt', 'CLAUDE', null, 3]) expect(isCredentialKind(kind)).toBe(false);
   });
 });

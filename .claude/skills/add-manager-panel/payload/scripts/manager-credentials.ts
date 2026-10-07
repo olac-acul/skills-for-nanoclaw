@@ -8,6 +8,7 @@
  *   save-claude         store an Anthropic API key or Claude subscription token (value on stdin)
  *   save-openai-key     store an OpenAI API key for OpenCode (value on stdin)
  *   chatgpt-login       start a ChatGPT device sign-in; prints the page and code, then waits
+ *   remove <kind>       delete a stored credential: claude, openai-key or chatgpt-login
  *
  * Secrets are read from stdin only and are never printed. Output is one JSON event per line, see
  * src/modules/manager-panel/credentials-protocol.ts.
@@ -21,13 +22,15 @@ import { CONTAINER_RUNTIME_BIN } from '../src/container-runtime.js';
 import {
   encodeEvent,
   findAnthropicSecret,
+  findSecretByName,
+  isCredentialKind,
   parseDeviceOutput,
   validSecret,
   type ScriptErrorCode,
   type ScriptEvent,
 } from '../src/modules/manager-panel/credentials-protocol.js';
 import { buildOpenCodeLoginArgs, createChatGptVault, readOpenCodeOAuth } from './opencode-auth.js';
-import { apiKeyInjection, createOpenCodeVault } from './opencode-vault.js';
+import { apiKeyInjection, CHATGPT_SECRET, createOpenCodeVault } from './opencode-vault.js';
 
 const LOGIN_TIMEOUT_MS = 15 * 60 * 1000;
 
@@ -63,8 +66,9 @@ function onecli(args: string[], env = process.env): string {
   });
 }
 
+const OPENAI_KEY_NAME = 'OpenCode openai';
 const openaiKeyVault = () =>
-  createOpenCodeVault({ name: 'OpenCode openai', kind: 'api-key', host: 'api.openai.com', injection: apiKeyInjection('openai') });
+  createOpenCodeVault({ name: OPENAI_KEY_NAME, kind: 'api-key', host: 'api.openai.com', injection: apiKeyInjection('openai') });
 
 async function status(): Promise<void> {
   let claude: boolean;
@@ -118,6 +122,24 @@ async function saveOpenAiKey(): Promise<void> {
     // eslint-disable-next-line no-catch-all/no-catch-all -- the gateway's message could contain the value; only a code leaves
   } catch {
     fail('save_failed');
+  }
+}
+
+async function removeCredential(): Promise<void> {
+  const kind = process.argv[3];
+  if (!isCredentialKind(kind)) return fail('script_failed');
+  try {
+    const list = onecli(['secrets', 'list']);
+    const found =
+      kind === 'claude'
+        ? findAnthropicSecret(list)
+        : findSecretByName(list, kind === 'openai-key' ? OPENAI_KEY_NAME : CHATGPT_SECRET.name);
+    // Already gone counts as removed.
+    if (found?.id) onecli(['secrets', 'delete', '--id', found.id]);
+    emit({ type: 'done' });
+    // eslint-disable-next-line no-catch-all/no-catch-all -- only a code leaves
+  } catch {
+    fail('remove_failed');
   }
 }
 
@@ -182,6 +204,7 @@ const handlers: Record<string, () => Promise<void>> = {
   'save-claude': saveClaude,
   'save-openai-key': saveOpenAiKey,
   'chatgpt-login': chatgptLogin,
+  remove: removeCredential,
 };
 const handler = handlers[command ?? ''];
 if (!handler) fail('script_failed');

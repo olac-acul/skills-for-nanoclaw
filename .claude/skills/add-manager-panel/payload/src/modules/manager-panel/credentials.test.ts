@@ -34,16 +34,16 @@ class FakeChild extends EventEmitter {
   }
 }
 
-let children: Array<{ command: string; child: FakeChild }>;
+let children: Array<{ command: string; argument?: string; child: FakeChild }>;
 let spawnScript: SpawnScript;
 let clock: number;
 
 beforeEach(() => {
   children = [];
   clock = 1_000;
-  spawnScript = (command) => {
+  spawnScript = (command, argument) => {
     const child = new FakeChild();
-    children.push({ command, child });
+    children.push({ command, argument, child });
     return child as never;
   };
 });
@@ -107,6 +107,39 @@ describe('saving a credential', () => {
     expect((error as CredentialError).code).toBe('save_failed');
     expect(JSON.stringify(error)).not.toContain(secret);
     expect(String((error as Error).message)).not.toContain(secret);
+  });
+
+  it('removes a credential by kind, sends no secret, and forgets the cached status', async () => {
+    const credentials = port();
+    const first = credentials.status();
+    await tick();
+    children[0].child.say({ type: 'status', claude: true, openaiKey: false, chatgptLogin: false });
+    children[0].child.exit();
+    await first;
+    const pending = credentials.removeCredential('claude');
+    await tick();
+    expect(children[1].command).toBe('remove');
+    expect(children[1].argument).toBe('claude');
+    expect(children[1].child.received).toBe('');
+    children[1].child.say({ type: 'done' });
+    children[1].child.exit();
+    await expect(pending).resolves.toBeUndefined();
+    const second = credentials.status();
+    await tick();
+    expect(children).toHaveLength(3);
+    children[2].child.say({ type: 'status', claude: false, openaiKey: false, chatgptLogin: false });
+    children[2].child.exit();
+    expect(await second).toEqual({ claude: false, openaiKey: false, chatgptLogin: false });
+  });
+
+  it('reports a failed removal as a code', async () => {
+    const credentials = port();
+    const pending = credentials.removeCredential('openai-key');
+    await tick();
+    children[0].child.say({ type: 'error', code: 'remove_failed' });
+    children[0].child.exit(1);
+    const error = await pending.catch((e: unknown) => e);
+    expect((error as CredentialError).code).toBe('remove_failed');
   });
 
   it('treats an exit without a done event as a failure', async () => {

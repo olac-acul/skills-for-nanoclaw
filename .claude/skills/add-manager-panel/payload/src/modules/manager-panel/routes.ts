@@ -10,7 +10,7 @@ import { BackupError } from '../manager-backup/service.js';
 import { AuthError, type Auth } from './auth.js';
 import type { PanelBackend } from './backend.js';
 import { CredentialError } from './credentials.js';
-import { validSecret } from './credentials-protocol.js';
+import { isCredentialKind, validSecret } from './credentials-protocol.js';
 import {
   ModelSettingsError,
   applyProviderChange,
@@ -447,6 +447,34 @@ export function buildRoutes(): Route[] {
     run: async (ctx) => {
       await ctx.deps.backend.credentials.saveOpenAiKey((ctx.body as { value: string }).value);
       return { status: 200, body: { saved: true } };
+    },
+  });
+
+  add({
+    name: 'credential_remove',
+    method: 'DELETE',
+    pattern: /^\/api\/v1\/credentials\/(claude|openai-key|chatgpt-login)$/,
+    access: 'session',
+    mutating: true,
+    reauth: true,
+    limit: 'mutation',
+    parse: noBody,
+    run: async (ctx) => {
+      const kind = ctx.params[0];
+      if (!isCredentialKind(kind)) throw new HttpError(400, 'invalid_request');
+      // A credential the agents are using right now is not removed from under them.
+      const status = await readModelStatus(ctx.deps.backend.model);
+      const inUse = detectProvider(
+        { OPENCODE_PROVIDER: status.provider, OPENCODE_BASE_URL: status.baseUrl, OPENCODE_AUTH_MODE: status.authMode },
+        status.groups,
+      );
+      const used =
+        (kind === 'claude' && inUse.kind === 'claude') ||
+        (kind === 'openai-key' && inUse.kind === 'chatgpt' && inUse.auth === 'api-key') ||
+        (kind === 'chatgpt-login' && inUse.kind === 'chatgpt' && inUse.auth === 'subscription');
+      if (used) throw new HttpError(409, 'credential_in_use');
+      await ctx.deps.backend.credentials.removeCredential(kind);
+      return { status: 200, body: { removed: true } };
     },
   });
 

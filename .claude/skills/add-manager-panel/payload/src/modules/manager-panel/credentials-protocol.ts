@@ -17,6 +17,7 @@ export type ScriptErrorCode =
   | 'gateway_unavailable'
   | 'invalid_secret'
   | 'save_failed'
+  | 'remove_failed'
   | 'login_failed'
   | 'login_timeout'
   | 'login_cancelled'
@@ -28,6 +29,7 @@ const ERROR_CODES: ReadonlySet<string> = new Set<ScriptErrorCode>([
   'gateway_unavailable',
   'invalid_secret',
   'save_failed',
+  'remove_failed',
   'login_failed',
   'login_timeout',
   'login_cancelled',
@@ -72,6 +74,19 @@ function isAnthropic(entry: SecretListEntry): boolean {
 /** Output of `onecli secrets list`: is an Anthropic credential stored, and under which id? */
 export function findAnthropicSecret(listJson: string): { id: string | null } | null {
   const found = secrets(listJson).find(isAnthropic);
+  return found ? { id: typeof found.id === 'string' ? found.id : null } : null;
+}
+
+/** The credentials the panel can remove. */
+export type CredentialKind = 'claude' | 'openai-key' | 'chatgpt-login';
+
+export function isCredentialKind(value: unknown): value is CredentialKind {
+  return value === 'claude' || value === 'openai-key' || value === 'chatgpt-login';
+}
+
+/** Output of `onecli secrets list`: the entry stored under exactly this name, if any. */
+export function findSecretByName(listJson: string, name: string): { id: string | null } | null {
+  const found = secrets(listJson).find((entry) => entry.name === name);
   return found ? { id: typeof found.id === 'string' ? found.id : null } : null;
 }
 

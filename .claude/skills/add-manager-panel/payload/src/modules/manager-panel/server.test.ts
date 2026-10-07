@@ -553,6 +553,24 @@ describe('providers and credentials', () => {
     expect(audit).not.toContain(SECRET);
   });
 
+  it('removes a stored credential after the password is confirmed, but not one the agents use', async () => {
+    const login = await setupAdmin();
+    backend.creds = { claude: true, openaiKey: true, chatgptLogin: true };
+    expect((await call('DELETE', '/api/v1/credentials/claude', login)).body.error.code).toBe('reauth_required');
+    expect(backend.removed).toEqual([]);
+    await reauth(login);
+    expect((await call('DELETE', '/api/v1/credentials/claude', login)).body).toEqual({ removed: true });
+    expect(backend.removed).toEqual(['claude']);
+    // The install runs ChatGPT with an API key: that key stays, the subscription login can go.
+    backend.env = { OPENCODE_PROVIDER: 'openai', OPENCODE_BASE_URL: 'native', OPENCODE_MODEL: 'openai/gpt' };
+    const inUse = await call('DELETE', '/api/v1/credentials/openai-key', login);
+    expect(inUse.status).toBe(409);
+    expect(inUse.body.error.code).toBe('credential_in_use');
+    expect((await call('DELETE', '/api/v1/credentials/chatgpt-login', login)).status).toBe(200);
+    expect(backend.removed).toEqual(['claude', 'chatgpt-login']);
+    expect((await call('DELETE', '/api/v1/credentials/bogus', login)).status).toBe(404);
+  });
+
   it('stores an OpenAI key and rejects values that are not a single token', async () => {
     const login = await setupAdmin();
     await reauth(login);

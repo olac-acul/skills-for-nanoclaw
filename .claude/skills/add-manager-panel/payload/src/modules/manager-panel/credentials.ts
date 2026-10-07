@@ -8,7 +8,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { parseEvents, type ScriptErrorCode, type ScriptEvent } from './credentials-protocol.js';
+import { parseEvents, type CredentialKind, type ScriptErrorCode, type ScriptEvent } from './credentials-protocol.js';
 
 export interface CredentialStatus {
   claude: boolean;
@@ -35,12 +35,14 @@ export interface CredentialsPort {
   status(): Promise<CredentialStatus>;
   saveClaude(value: string): Promise<void>;
   saveOpenAiKey(value: string): Promise<void>;
+  /** Delete a stored credential from the gateway; removing one that is not there is not an error. */
+  removeCredential(kind: CredentialKind): Promise<void>;
   startChatgptLogin(): LoginState;
   loginState(): LoginState;
   cancelChatgptLogin(): void;
 }
 
-export type SpawnScript = (command: string) => ChildProcess;
+export type SpawnScript = (command: string, argument?: string) => ChildProcess;
 
 export interface CredentialsOptions {
   projectRoot: string;
@@ -57,10 +59,10 @@ export function createCredentialsPort(options: CredentialsOptions): CredentialsP
   const statusTtlMs = options.statusTtlMs ?? 3_000;
   const start: SpawnScript =
     options.spawnScript ??
-    ((command) =>
+    ((command, argument) =>
       spawn(
         path.join(options.projectRoot, 'node_modules', '.bin', 'tsx'),
-        ['scripts/manager-credentials.ts', command],
+        ['scripts/manager-credentials.ts', command, ...(argument ? [argument] : [])],
         {
           cwd: options.projectRoot,
           stdio: ['pipe', 'pipe', 'ignore'],
@@ -71,9 +73,9 @@ export function createCredentialsPort(options: CredentialsOptions): CredentialsP
   let login: { child: ChildProcess; state: LoginState } | null = null;
 
   /** Run one command to completion and return its events. */
-  function run(command: string, secret?: string): Promise<ScriptEvent[]> {
+  function run(command: string, secret?: string, argument?: string): Promise<ScriptEvent[]> {
     return new Promise((resolve, reject) => {
-      const child = start(command);
+      const child = start(command, argument);
       let stdout = '';
       const timer = setTimeout(() => {
         child.kill('SIGTERM');
@@ -136,6 +138,12 @@ export function createCredentialsPort(options: CredentialsOptions): CredentialsP
     },
     saveClaude: (value) => save('save-claude', value),
     saveOpenAiKey: (value) => save('save-openai-key', value),
+    async removeCredential(kind) {
+      requireScript();
+      const problem = failure(await run('remove', undefined, kind));
+      cached = null;
+      if (problem) throw problem;
+    },
     startChatgptLogin() {
       requireScript();
       if (login && login.state.state === 'waiting') return login.state;

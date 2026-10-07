@@ -343,6 +343,15 @@ switching back to an endpoint later is one step.
 
 As with ChatGPT, the panel cannot check a model name against Anthropic.
 
+### Removing a credential
+
+Next to each stored credential there is a **Remove** button (click it twice, then confirm your
+password). It deletes the secret from the gateway: the ChatGPT login, the OpenAI key (the secret named
+*OpenCode openai*) or the Anthropic one. The panel refuses while the agents are using that credential,
+so switch to another provider first. Removing something that is already gone is not an error. Removing
+a ChatGPT login here does not sign you out of ChatGPT itself; revoke an API key on the provider's own
+site as well if you no longer want it to work.
+
 ### How a model change works
 
 Applying a change (an endpoint, ChatGPT or Claude) does this, in order:
@@ -684,6 +693,7 @@ State-changing calls need the cookie, the `X-CSRF-Token` header and an `Origin` 
 | `POST /model/apply` | yes | apply it to all agents |
 | `GET /credentials` | no | which provider credentials are stored (booleans) |
 | `POST /credentials/claude`, `POST /credentials/openai-key` | yes | store a key or token; nothing is returned |
+| `DELETE /credentials/claude`, `/openai-key`, `/chatgpt-login` | yes | remove a stored credential; refused with 409 while in use |
 | `POST`, `GET`, `DELETE /credentials/chatgpt/login` | start: yes | ChatGPT device sign-in: start, poll for page and code, cancel |
 | `GET /backups` | no | list |
 | `POST /backups` | yes | create; the response holds the key, once |

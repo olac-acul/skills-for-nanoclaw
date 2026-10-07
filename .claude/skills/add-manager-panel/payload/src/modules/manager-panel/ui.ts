@@ -163,7 +163,7 @@ var T = {
       chatgpt: 'OpenAI models through your ChatGPT subscription or an OpenAI API key. Agents use OpenCode.',
       claude: 'Anthropic models through the Claude provider NanoClaw ships with, using an API key or a Claude subscription token.',
     },
-    default_model: 'default', credential: 'Credential in the gateway', stored: 'stored', not_stored: 'not stored yet', save: 'Save', saved: 'Saved in the credential gateway.',
+    default_model: 'default', credential: 'Credential in the gateway', stored: 'stored', not_stored: 'not stored yet', save: 'Save', saved: 'Saved in the credential gateway.', remove: 'Remove', remove_confirm: 'Click again to remove',
     use_ollama: 'Use Ollama', ollama_hint: 'Fills the address Ollama has on this machine, then checks it.', models_found: 'Models offered',
     openai_key: 'OpenAI API key', openai_key_help: 'Handed straight to the credential gateway and never shown again.',
     claude_secret: 'Anthropic API key or Claude subscription token', claude_help: 'For a subscription, run claude setup-token in a terminal and paste the token it prints. Handed straight to the credential gateway and never shown again.',
@@ -191,7 +191,7 @@ var T = {
     unauthenticated: 'Your session ended. Sign in again.', reauth_required: 'Confirm your password first.', rate_limited: 'Too many requests. Slow down.',
     agents_busy: 'Agents are still running. Try again later or back up anyway.', probe_failed: 'The endpoint did not pass its checks',
     model_not_found: 'The endpoint does not list that model.', credential_missing: 'Store the credential first.', invalid_secret: 'That does not look like a key or token.',
-    save_failed: 'The credential gateway did not accept it.', login_failed: 'The sign-in did not complete.', login_timeout: 'The sign-in took too long.', login_cancelled: 'The sign-in was cancelled.',
+    save_failed: 'The credential gateway did not accept it.', remove_failed: 'The credential could not be removed.', credential_in_use: 'The agents use this credential right now. Switch to another provider first.', login_failed: 'The sign-in did not complete.', login_timeout: 'The sign-in took too long.', login_cancelled: 'The sign-in was cancelled.',
     gateway_unavailable: 'The credential gateway is not reachable.', runtime_unavailable: 'Docker is not available.', script_missing: 'Provider credentials need the OpenCode and OneCLI skills installed.', script_failed: 'The credentials helper failed. Check the NanoClaw log.', small_model_not_found: 'The endpoint does not list the small model.', endpoint_unreachable: 'Could not reach the endpoint.', endpoint_invalid: 'That is not a valid endpoint URL.',
     endpoint_not_allowed: 'That address is not allowed.', endpoint_insecure: 'Plain HTTP is only accepted for local addresses; use HTTPS.',
     endpoint_unauthorized: 'The endpoint wants an API key.', endpoint_unresolvable: 'The name could not be resolved.', endpoint_tls_failed: 'The TLS certificate could not be verified.',
@@ -337,6 +337,18 @@ function viewModel() {
 
   function loadCreds() {
     return api('GET', '/credentials').then(function (c) { creds = c; }).catch(function () { creds = null; });
+  }
+  function removeButton(kind) {
+    var btn = h('button', { type: 'button', class: 'danger' }, T.provider.remove); var note = h('span'); var armed = false; var timer = null;
+    function disarm() { armed = false; btn.textContent = T.provider.remove; }
+    btn.onclick = function () {
+      clear(note);
+      if (!armed) { armed = true; btn.textContent = T.provider.remove_confirm; timer = setTimeout(disarm, 5000); return; }
+      clearTimeout(timer); btn.disabled = true;
+      ensureReauth().then(function () { return api('DELETE', '/credentials/' + kind); }).then(loadCreds).then(function () { renderPanel(); })
+        .catch(function (err) { btn.disabled = false; disarm(); fail(note, err); });
+    };
+    return h('span', {}, btn, note);
   }
   function pill(ok, yes, no) { return h('span', { class: 'pill ' + (ok ? 'ok' : 'bad') }, ok ? yes : no); }
   function strip(v) { var o = {}; for (var k in v) if (v[k] !== undefined && v[k] !== '') o[k] = v[k]; return o; }
@@ -493,7 +505,7 @@ function viewModel() {
       var have = creds ? (auth === 'subscription' ? creds.chatgpt_login : creds.openai_key) : false;
       wrap.appendChild(authRow);
       if (!creds) { wrap.appendChild(message('error', explain({ code: 'script_missing' }))); return; }
-      wrap.appendChild(h('p', {}, T.provider.credential + ': ', pill(have, T.provider.stored, T.provider.not_stored)));
+      wrap.appendChild(h('p', {}, T.provider.credential + ': ', pill(have, T.provider.stored, T.provider.not_stored), have ? ' ' : null, have ? removeButton(auth === 'subscription' ? 'chatgpt-login' : 'openai-key') : null));
       wrap.appendChild(auth === 'subscription' ? chatgptLoginWidget() : secretForm(T.provider.openai_key, T.provider.openai_key_help, function (v) { return api('POST', '/credentials/openai-key', { value: v }); }, 'chatgpt'));
       fields.nodes.forEach(function (n) { wrap.appendChild(n); });
       wrap.appendChild(result);
@@ -507,7 +519,7 @@ function viewModel() {
     var result = h('div'); var fields = modelFields({ label: T.provider.claude_model, placeholder: T.provider.claude_model_hint, small: false });
     var wrap = h('div');
     if (!creds) { wrap.appendChild(message('error', explain({ code: 'script_missing' }))); return wrap; }
-    wrap.appendChild(h('p', {}, T.provider.credential + ': ', pill(creds.claude, T.provider.stored, T.provider.not_stored)));
+    wrap.appendChild(h('p', {}, T.provider.credential + ': ', pill(creds.claude, T.provider.stored, T.provider.not_stored), creds.claude ? ' ' : null, creds.claude ? removeButton('claude') : null));
     wrap.appendChild(secretForm(T.provider.claude_secret, T.provider.claude_help, function (v) { return api('POST', '/credentials/claude', { value: v }); }, 'claude'));
     fields.nodes.forEach(function (n) { wrap.appendChild(n); });
     wrap.appendChild(result);

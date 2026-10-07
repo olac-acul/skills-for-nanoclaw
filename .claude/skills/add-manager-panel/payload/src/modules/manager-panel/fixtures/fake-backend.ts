@@ -22,6 +22,7 @@ export interface FakeBackend extends PanelBackend {
   busy: boolean;
   creds: { claude: boolean; openaiKey: boolean; chatgptLogin: boolean };
   saved: Array<{ kind: string; length: number }>;
+  removed: string[];
   login: LoginState;
   loginCancelled: boolean;
 }
@@ -59,6 +60,7 @@ export function fakeBackend(dir: string): FakeBackend {
     busy: false,
     creds: { claude: false, openaiKey: false, chatgptLogin: false },
     saved: [],
+    removed: [],
     login: { state: 'idle' },
     loginCancelled: false,
     bridgeAddress: () => '100.64.0.1',
@@ -71,6 +73,12 @@ export function fakeBackend(dir: string): FakeBackend {
       async saveOpenAiKey(value) {
         self.saved.push({ kind: 'openai-key', length: value.length });
         self.creds.openaiKey = true;
+      },
+      async removeCredential(kind) {
+        self.removed.push(kind);
+        if (kind === 'claude') self.creds.claude = false;
+        else if (kind === 'openai-key') self.creds.openaiKey = false;
+        else self.creds.chatgptLogin = false;
       },
       startChatgptLogin() {
         self.login = { state: 'waiting', url: 'https://login.example.test/device', code: 'ABCD-12345' };
