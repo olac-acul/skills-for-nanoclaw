@@ -385,7 +385,12 @@ function viewModel() {
 
   function chatgptLoginWidget() {
     var area = h('div'); var btn = h('button', { type: 'button' }, T.provider.signin);
+    var shown = '';
     function show_(state) {
+      // Redrawing every poll would drop a text selection (the code being copied), so only redraw on a change.
+      var key = state.state + '|' + (state.url || '') + '|' + (state.code || '') + '|' + (state.error || '');
+      if (key === shown) return;
+      shown = key;
       clear(area);
       if (state.state === 'waiting' && state.url) {
         area.appendChild(h('div', { class: 'notice' }, T.provider.signin_steps, ' ', h('a', { href: state.url, target: '_blank', rel: 'noopener noreferrer' }, state.url),
@@ -407,7 +412,7 @@ function viewModel() {
       }).catch(function () { setTimeout(poll, 4000); });
     }
     btn.onclick = function () {
-      btn.disabled = true; clear(area);
+      btn.disabled = true; clear(area); shown = '';
       ensureReauth().then(function () { return api('POST', '/credentials/chatgpt/login'); }).then(function (state) { show_(state); setTimeout(poll, 1500); })
         .catch(function (err) { btn.disabled = false; fail(area, err); });
     };

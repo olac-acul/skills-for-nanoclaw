@@ -163,7 +163,10 @@ async function chatgptLogin(): Promise<void> {
       const secret = readOpenCodeOAuth(JSON.parse(fs.readFileSync(authPath, 'utf8')));
       // The native token files are removed before the network call to the gateway.
       fs.rmSync(loginDir, { recursive: true, force: true });
-      await createChatGptVault().save(secret);
+      // save() replaces the entry find() observed, so the lookup comes first.
+      const vault = createChatGptVault();
+      await vault.find();
+      await vault.save(secret);
       emit({ type: 'done' });
       finish();
       // eslint-disable-next-line no-catch-all/no-catch-all -- error text could contain token data; only a code leaves
