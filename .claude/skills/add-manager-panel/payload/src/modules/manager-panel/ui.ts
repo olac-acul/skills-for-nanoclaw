@@ -167,7 +167,7 @@ var T = {
     use_ollama: 'Use Ollama', ollama_hint: 'Fills the address Ollama has on this machine, then checks it.', models_found: 'Models offered',
     openai_key: 'OpenAI API key', openai_key_help: 'Handed straight to the credential gateway and never shown again.',
     claude_secret: 'Anthropic API key or Claude subscription token', claude_help: 'For a subscription, run claude setup-token in a terminal and paste the token it prints. Handed straight to the credential gateway and never shown again.',
-    claude_model: 'Model (optional)', claude_model_hint: 'empty = the provider default', chatgpt_model_hint: 'as named by OpenAI',
+    claude_model: 'Model (optional)', claude_model_hint: 'empty = default, or a full name such as claude-haiku-4-5-20251001', chatgpt_model_hint: 'as named by OpenAI',
     signin: 'Sign in with ChatGPT', signin_help: 'Shows a page and a code; you enter the code there while signed in to ChatGPT.', signin_steps: 'Open this page, sign in, and enter the code:', signin_starting: 'Starting the sign-in…',
     agents_restarted: 'agents restarted.',
   },

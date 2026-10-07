@@ -341,7 +341,9 @@ Applying Claude sets every agent's provider back to the default (Claude) and, if
 model; leave the model empty to use the provider's default. The `OPENCODE_*` settings are left alone, so
 switching back to an endpoint later is one step.
 
-As with ChatGPT, the panel cannot check a model name against Anthropic.
+As with ChatGPT, the panel cannot check a model name against Anthropic. Use the full name Anthropic
+gives (for example `claude-haiku-4-5-20251001`); a short or invented name such as `haiku-4.5` makes every
+agent answer with *There's an issue with the selected model*.
 
 ### Removing a credential
 
