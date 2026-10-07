@@ -84,4 +84,6 @@ Things to know (none needed a code change):
   `data/v2.db` behind; a rollback restores that state.
 - **Message wording.** In a rehearsal the `.env` summary prints `NO_PROXY` both as kept (this
   machine's value) and as dropped (the backup's); the file keeps this machine's value.
+- After `commit` or `rollback`, a transaction's small `journal.json` stays in `.manager-backup-txn/` as a
+  record; the rollback copy and scratch directories are gone.
 - Credentials in the gateway are not part of a backup (decided): they have to be entered again.
