@@ -30,6 +30,7 @@ test('flags LAN-only hostnames but not .test names', () => {
 test('does not mistake file names for LAN hostnames', () => {
   assert.deepEqual(scanText('groups/x/CLAUDE.local.md', 'f'), []);
   assert.equal(scanText(`ping nas.${'local'}.`, 'f')[0].rule, 'private-hostname');
+  assert.deepEqual(scanText(`http://host.docker.${'internal'}:8000/v1`, 'f'), []);
   assert.equal(scanText(`http://nas.${'lan'}:8080/x`, 'f')[0].rule, 'private-hostname');
 });
 
