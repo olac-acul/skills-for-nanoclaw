@@ -311,6 +311,12 @@ the practical choice for day-to-day use. The first **Check endpoint** can also b
 is loaded into memory by that first request; for a model on this machine the panel waits up to two
 minutes for it.
 
+**Model size.** In a test on a CPU-only machine, `qwen2.5:3b` took about ten minutes to answer a
+greeting, and the answer was not in the format agents must use (a `<message to="...">` block), so
+nothing was delivered: it talked about creating a directory it had no reason to touch. The pipeline
+(panel, endpoint, agent, model) worked; the model was too small and too slow for an agent. Expect to
+need a much larger model and a GPU for useful results.
+
 **Context window.** Ollama's default window is 4,096 tokens (`OLLAMA_CONTEXT_LENGTH` in its service
 environment raises it). Agents with long conversations or many tools need more; if answers stop
 following the instructions, raise it. Ollama does not report the window to the panel, so the panel
