@@ -41,6 +41,8 @@ payload/scripts/tsconfig.manager-credentials.json -> scripts/tsconfig.manager-cr
 payload/scripts/tsconfig.manager-panel.json -> scripts/tsconfig.manager-panel.json
 payload/src/modules/manager-panel/auth.ts -> src/modules/manager-panel/auth.ts
 payload/src/modules/manager-panel/backend.ts -> src/modules/manager-panel/backend.ts
+payload/src/modules/manager-panel/backup-job.test.ts -> src/modules/manager-panel/backup-job.test.ts
+payload/src/modules/manager-panel/backup-job.ts -> src/modules/manager-panel/backup-job.ts
 payload/src/modules/manager-panel/config.ts -> src/modules/manager-panel/config.ts
 payload/src/modules/manager-panel/credentials-protocol.test.ts -> src/modules/manager-panel/credentials-protocol.test.ts
 payload/src/modules/manager-panel/credentials-protocol.ts -> src/modules/manager-panel/credentials-protocol.ts

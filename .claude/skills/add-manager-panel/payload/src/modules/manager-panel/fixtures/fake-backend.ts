@@ -19,6 +19,8 @@ export interface FakeBackend extends PanelBackend {
   probeResult: ProbeResult;
   records: BackupRecord[];
   createCalls: Array<{ waitMs?: number; force?: boolean }>;
+  /** While set, create() stays in progress until it resolves. */
+  createGate: Promise<void> | null;
   busy: boolean;
   creds: { claude: boolean; openaiKey: boolean; chatgptLogin: boolean };
   saved: Array<{ kind: string; length: number }>;
@@ -57,6 +59,7 @@ export function fakeBackend(dir: string): FakeBackend {
     probeResult: { reason: null, models: ['qwen', 'llama'], contextLimit: 16384, local: true },
     records: [],
     createCalls: [],
+    createGate: null,
     busy: false,
     creds: { claude: false, openaiKey: false, chatgptLogin: false },
     saved: [],
@@ -140,6 +143,9 @@ export function fakeBackend(dir: string): FakeBackend {
       list: () => [...self.records].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
       async create(options) {
         self.createCalls.push({ waitMs: options.waitMs, force: options.force });
+        if (self.createGate) await self.createGate;
+        options.onProgress?.({ phase: 'snapshot', entries: 0, bytes: 0 });
+        options.onProgress?.({ phase: 'pack', entries: 10, bytes: 1234 });
         if (self.busy && !options.force) {
           const { BackupError } = await import('../../manager-backup/service.js');
           throw new BackupError('agents_busy', 'busy');
@@ -151,7 +157,7 @@ export function fakeBackend(dir: string): FakeBackend {
           bytes: 1234,
           release: '2.4.0',
           commit: 'a'.repeat(40),
-          consistency: options.force ? 'best-effort' : 'quiescent',
+          consistency: self.busy ? 'best-effort' : 'quiescent',
           entries: 10,
           files: 5,
           contentBytes: 999,

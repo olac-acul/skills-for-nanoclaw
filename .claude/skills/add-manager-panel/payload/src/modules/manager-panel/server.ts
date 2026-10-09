@@ -23,6 +23,7 @@ import net from 'node:net';
 
 import { classifyAddress } from './model-endpoint.js';
 import { Auth } from './auth.js';
+import { BackupJobs } from './backup-job.js';
 import type { PanelBackend } from './backend.js';
 import {
   HttpError,
@@ -155,7 +156,11 @@ export function createPanelServer(config: PanelServerConfig): http.Server {
     insecureHttp: !secure,
     setCookie: (token) => `${cookieName}=${token}; ${attributes}`,
     clearCookie: () => `${cookieName}=; ${attributes}; Max-Age=0`,
-    backupWaitMs: config.backupWaitMs ?? 120_000,
+    backupJobs: new BackupJobs(config.backend.backups, {
+      waitMs: config.backupWaitMs ?? 60_000,
+      now,
+      onError: config.onError,
+    }),
   };
 
   function limit(key: string, kind: LimitClass): void {

@@ -180,9 +180,15 @@ var T = {
   },
   backups: {
     title: 'Backups', create: 'Create backup', created: 'Created', size: 'Size', release: 'Release', consistency: 'Consistency', actions: 'Actions',
-    verify: 'Verify', download: 'Download', del: 'Delete', force: 'Back up even if agents are running',
+    verify: 'Verify', download: 'Download', del: 'Delete',
     keyTitle: 'Save this key now', keyBody: 'This key is needed to open the backup and is not stored anywhere. Put it in your password manager.', keySaved: 'I have stored the key',
-    verifyKey: 'Backup key', verifyOk: 'The backup is intact.', confirmDelete: 'Delete this backup permanently?', waiting: 'Waiting for running agents to finish before the snapshot…',
+    verifyKey: 'Backup key', verifyOk: 'The backup is intact.', confirmDelete: 'Delete this backup permanently?',
+    running: 'Backup in progress', elapsed: 'Elapsed', keepOpen: 'You can leave this page open or come back later: the backup keeps running.',
+    phase_waiting: 'Waiting up to {n} seconds for agents to finish their current message, so the copy is consistent. The backup goes ahead either way.',
+    phase_snapshot: 'Copying the database…', phase_pack: 'Packing and encrypting: {files} files, {size} so far.',
+    doneTitle: 'Backup complete', doneNoKey: 'The last backup finished and its key was already shown. If you did not save it, create a new backup.',
+    bestEffort: 'Some agents were still working while the backup ran. Every database file is consistent on its own, but the files were not copied at the same instant. For a perfectly consistent copy, stop NanoClaw first.',
+    consAgentsIdle: 'Agents idle', consAgentsWorking: 'Agents were working', consStopped: 'NanoClaw stopped',
     note: 'Restoring is done from a terminal, with NanoClaw stopped.', restoreHelp: 'How to restore', keyHelp: 'About the key', consistencyHelp: 'Consistency levels', retentionHelp: 'Retention and pruning', moveHelp: 'Moving to another machine',
   },
   errors: {
@@ -541,20 +547,44 @@ function viewModel() {
 }
 
 function viewBackups() {
-  var out = h('div'); var box = h('div', { class: 'card' }, T.loading); var force = h('input', { type: 'checkbox' });
-  var createBtn = h('button', { class: 'primary', type: 'button' }, T.backups.create);
-  show(h('div', {}, h('h1', {}, T.backups.title), h('p', { class: 'muted' }, T.backups.note, ' ', guide('restoring-a-backup', T.backups.restoreHelp)), h('div', { class: 'links' }, guide('the-backup-key', T.backups.keyHelp), guide('consistency-levels', T.backups.consistencyHelp), guide('retention-and-pruning', T.backups.retentionHelp), guide('moving-to-another-machine', T.backups.moveHelp)), h('div', { class: 'row' }, createBtn, h('label', { class: 'row' }, force, T.backups.force)), out, box));
+  var out = h('div'); var box = h('div', { class: 'card' }, T.loading); var progress = h('div');
+  var createBtn = h('button', { class: 'primary', type: 'button' }, T.backups.create); var timer = null;
+  show(h('div', {}, h('h1', {}, T.backups.title), h('p', { class: 'muted' }, T.backups.note, ' ', guide('restoring-a-backup', T.backups.restoreHelp)), h('div', { class: 'links' }, guide('the-backup-key', T.backups.keyHelp), guide('consistency-levels', T.backups.consistencyHelp), guide('retention-and-pruning', T.backups.retentionHelp), guide('moving-to-another-machine', T.backups.moveHelp)), h('div', { class: 'row' }, createBtn), progress, out, box));
   createBtn.onclick = function () {
     clear(out); createBtn.disabled = true;
-    ensureReauth().then(function () { out.appendChild(message('ok', T.backups.waiting)); return api('POST', '/backups', { force: force.checked }); }).then(function (r) {
-      clear(out); showKey(r.key); load();
-    }).catch(function (err) { clear(out); fail(out, err); }).then(function () { createBtn.disabled = false; });
+    ensureReauth().then(function () { return api('POST', '/backups', {}); }).then(function (r) { follow(r.job); })
+      .catch(function (err) { createBtn.disabled = false; fail(out, err); });
   };
-  function showKey(key) {
+  // Draws the state of the backup and keeps asking until it is over.
+  function follow(job) {
+    clearTimeout(timer);
+    if (job.state === 'running') { createBtn.disabled = true; drawProgress(job); timer = setTimeout(poll, 2000); return; }
+    clear(progress); createBtn.disabled = false;
+    if (job.state === 'error') return fail(out, { code: job.error });
+    if (job.state === 'done') {
+      if (job.key) showKey(job.key, job.backup); else out.appendChild(message('ok', T.backups.doneNoKey));
+      load();
+    }
+  }
+  function poll() {
+    if (!document.body.contains(progress)) return;
+    api('GET', '/backups/job').then(function (r) { follow(r.job); }).catch(function () { timer = setTimeout(poll, 4000); });
+  }
+  function clockText(sec) { return Math.floor(sec / 60) + ' min ' + (sec % 60) + ' s'; }
+  function drawProgress(job) {
+    var text = job.phase === 'waiting' ? T.backups.phase_waiting.replace('{n}', job.wait_seconds)
+      : job.phase === 'snapshot' ? T.backups.phase_snapshot
+      : T.backups.phase_pack.replace('{files}', job.entries).replace('{size}', fmtBytes(job.bytes));
+    clear(progress);
+    progress.appendChild(h('div', { class: 'notice', role: 'status' }, h('strong', {}, T.backups.running), h('p', {}, text),
+      h('progress', {}), h('p', { class: 'muted' }, T.backups.elapsed + ': ' + clockText(job.elapsed_seconds) + '. ' + T.backups.keepOpen)));
+  }
+  function consLabel(c) { return c === 'quiescent' ? T.backups.consAgentsIdle : c === 'best-effort' ? T.backups.consAgentsWorking : c === 'cold' ? T.backups.consStopped : c; }
+  function showKey(key, backup) {
     var saved = h('input', { type: 'checkbox' }); var done = h('button', { class: 'primary', type: 'button', disabled: true }, T.close);
     dialog(function (close) {
       saved.onchange = function () { done.disabled = !saved.checked; }; done.onclick = close;
-      return h('div', {}, h('h1', {}, T.backups.keyTitle), h('p', {}, T.backups.keyBody), h('code', { class: 'key' }, key), h('p', {}, guide('the-backup-key', T.backups.keyHelp)), h('label', { class: 'row' }, saved, T.backups.keySaved), h('div', { class: 'row' }, done));
+      return h('div', {}, h('h1', {}, T.backups.keyTitle), h('p', {}, T.backups.keyBody), h('code', { class: 'key' }, key), backup && backup.consistency === 'best-effort' ? h('div', { class: 'notice' }, T.backups.bestEffort, ' ', guide('consistency-levels', T.backups.consistencyHelp)) : null, h('p', {}, guide('the-backup-key', T.backups.keyHelp)), h('label', { class: 'row' }, saved, T.backups.keySaved), h('div', { class: 'row' }, done));
     });
   }
   function load() {
@@ -566,7 +596,7 @@ function viewBackups() {
         var verify = h('button', { type: 'button', onclick: function () { verifyDialog(b.id); } }, T.backups.verify);
         var download = h('button', { type: 'button', onclick: function () { clear(out); ensureReauth().then(function () { window.location.href = '/api/v1/backups/' + b.id + '/download'; }).catch(function (err) { fail(out, err); }); } }, T.backups.download);
         var del = h('button', { class: 'danger', type: 'button', onclick: function () { if (!window.confirm(T.backups.confirmDelete)) return; clear(out); ensureReauth().then(function () { return api('DELETE', '/backups/' + b.id); }).then(load).catch(function (err) { fail(out, err); }); } }, T.backups.del);
-        body.appendChild(h('tr', {}, h('td', {}, fmtDate(b.created_at)), h('td', {}, fmtBytes(b.bytes)), h('td', {}, b.release), h('td', {}, b.consistency), h('td', {}, h('div', { class: 'row' }, verify, download, del))));
+        body.appendChild(h('tr', {}, h('td', {}, fmtDate(b.created_at)), h('td', {}, fmtBytes(b.bytes)), h('td', {}, b.release), h('td', {}, consLabel(b.consistency)), h('td', {}, h('div', { class: 'row' }, verify, download, del))));
       });
       box.appendChild(h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, T.backups.created), h('th', {}, T.backups.size), h('th', {}, T.backups.release), h('th', {}, T.backups.consistency), h('th', {}, T.backups.actions))), body));
     }).catch(function (err) { clear(box); fail(box, err); });
@@ -580,6 +610,7 @@ function viewBackups() {
     });
   }
   load();
+  api('GET', '/backups/job').then(function (r) { if (r.job.state === 'running' || (r.job.state === 'done' && r.job.key)) follow(r.job); }).catch(function () {});
 }
 
 var views = { overview: viewOverview, agents: viewAgents, model: viewModel, backups: viewBackups };

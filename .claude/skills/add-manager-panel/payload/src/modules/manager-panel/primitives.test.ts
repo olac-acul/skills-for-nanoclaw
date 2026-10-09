@@ -167,7 +167,7 @@ describe('configuration', () => {
       port: 3200,
       allowPublic: false,
       allowedHosts: [],
-      backupWaitSeconds: 120,
+      backupWaitSeconds: 60,
     });
     expect(config.backupDir).toContain(path.join('nanoclaw-backups', 'slug1'));
     expect(isLoopbackBind(config.bind)).toBe(true);

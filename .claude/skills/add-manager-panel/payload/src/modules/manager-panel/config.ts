@@ -72,7 +72,7 @@ export function parsePanelConfig(env: Record<string, string | undefined>, instal
     allowPublic: (env.PANEL_ALLOW_PUBLIC ?? '').toLowerCase() === 'true',
     backupDir:
       env.PANEL_BACKUP_DIR?.trim() || path.join(os.homedir(), '.local', 'share', 'nanoclaw-backups', installSlug),
-    backupWaitSeconds: integer(env.PANEL_BACKUP_WAIT_SECONDS, 120, 0, 3600, 'PANEL_BACKUP_WAIT_SECONDS'),
+    backupWaitSeconds: integer(env.PANEL_BACKUP_WAIT_SECONDS, 60, 0, 3600, 'PANEL_BACKUP_WAIT_SECONDS'),
   };
 }
 

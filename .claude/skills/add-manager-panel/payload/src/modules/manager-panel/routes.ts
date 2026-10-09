@@ -8,6 +8,7 @@
 import { CryptoError } from '../manager-backup/crypto.js';
 import { BackupError } from '../manager-backup/service.js';
 import { AuthError, type Auth } from './auth.js';
+import type { BackupJobs, JobStatus } from './backup-job.js';
 import type { PanelBackend } from './backend.js';
 import { CredentialError } from './credentials.js';
 import { isCredentialKind, validSecret } from './credentials-protocol.js';
@@ -50,8 +51,8 @@ export interface RouteDeps {
   insecureHttp: boolean;
   setCookie(token: string): string;
   clearCookie(): string;
-  /** How long a hot backup waits for running agents. */
-  backupWaitMs: number;
+  /** Runs backups in the background and reports their progress. */
+  backupJobs: BackupJobs;
 }
 
 export interface RouteContext {
@@ -541,15 +542,21 @@ export function buildRoutes(): Route[] {
     mutating: true,
     reauth: true,
     limit: 'mutation',
+    // `force` is accepted and ignored: a backup always goes ahead once the wait for busy agents is over.
     parse: (raw) => fields<{ force?: boolean }>(raw, { force: { type: 'boolean', optional: true } }),
-    run: async (ctx) => {
-      const { force } = ctx.body as { force?: boolean };
-      const { record, key } = await ctx.deps.backend.backups.create({
-        waitMs: ctx.deps.backupWaitMs,
-        force: force === true,
-      });
-      return { status: 201, body: { backup: backupView(record), key } };
-    },
+    run: async (ctx) => ({ status: 202, body: { job: jobView(ctx.deps.backupJobs.start()) } }),
+  });
+
+  // The progress of the backup, and, once, its key. Polled by the page while a backup runs.
+  add({
+    name: 'backup_job',
+    method: 'GET',
+    pattern: /^\/api\/v1\/backups\/job$/,
+    access: 'session',
+    mutating: false,
+    limit: 'read',
+    parse: noBody,
+    run: async (ctx) => ({ status: 200, body: { job: jobView(ctx.deps.backupJobs.status()) } }),
   });
 
   add({
@@ -607,6 +614,11 @@ export function buildRoutes(): Route[] {
   });
 
   return routes;
+}
+
+function jobView(status: JobStatus): Record<string, unknown> {
+  if (status.state === 'done') return { ...status, backup: backupView(status.backup) };
+  return { ...status };
 }
 
 function backupView(record: {

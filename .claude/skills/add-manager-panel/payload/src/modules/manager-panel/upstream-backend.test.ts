@@ -176,9 +176,15 @@ describe('panel on a real install', () => {
   it('creates a real encrypted backup that verifies, downloads and opens with the returned key', async () => {
     const session = await signIn();
     await api('POST', '/api/v1/session/reauth', session, { password: PASSWORD });
-    const created = await api('POST', '/api/v1/backups', session, {});
-    expect(created.status).toBe(201);
-    const { backup, key } = created.body;
+    const started = await api('POST', '/api/v1/backups', session, {});
+    expect(started.status).toBe(202);
+    let job = started.body.job;
+    for (let attempt = 0; attempt < 600 && job.state === 'running'; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      job = (await api('GET', '/api/v1/backups/job', session)).body.job;
+    }
+    expect(job.state).toBe('done');
+    const { backup, key } = job;
 
     const verified = await api('POST', `/api/v1/backups/${backup.id}/verify`, session, { key });
     expect(verified.body).toMatchObject({ ok: true, consistency: 'quiescent' });

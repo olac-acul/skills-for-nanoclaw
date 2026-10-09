@@ -179,7 +179,7 @@ network. Choose one of these to encrypt the connection:
    ```
 
    The long read timeout matters: creating a backup can wait for running agents (up to
-   `PANEL_BACKUP_WAIT_SECONDS`, 120 by default), and downloads can be large.
+   `PANEL_BACKUP_WAIT_SECONDS`, 60 by default), and downloads can be large.
 
 With HTTPS the session cookie becomes `__Host-manager_panel` with the `Secure` flag, and the
 `Strict-Transport-Security` header is sent.
@@ -458,9 +458,13 @@ variable, from `--key-file <path>`, or from a hidden prompt, never from a comman
 | `quiescent` | NanoClaw was running but no agent was working on a message. |
 | `best-effort` | An agent was working. Each database file is still consistent, but files were not copied at the same instant. |
 
-From the panel, **Create backup** first waits (up to 120 seconds by default) for agents that are in the
-middle of a turn. Agents that are alive but idle do not count. If agents are still busy afterwards the
-backup is refused, unless you tick *Back up even if agents are running*, which records `best-effort`.
+From the panel, **Create backup** starts the backup in the background and shows how it is going. It first
+waits (up to 60 seconds by default, `PANEL_BACKUP_WAIT_SECONDS`) for agents that are in the middle of a turn,
+so the copy is as consistent as possible. Agents that are alive but idle do not count. When the wait is over
+the backup **goes ahead anyway**; the result says whether it is `quiescent` or `best-effort`. Then the panel
+shows the backup's **key, once**: store it before closing the window. A backup of several gigabytes takes
+minutes; you can leave the page and come back, and it picks up where things stand (a key that nobody
+collected within 15 minutes is dropped and the backup has to be repeated). Only one backup runs at a time.
 
 ### Retention and pruning
 
@@ -653,7 +657,7 @@ are yours to delete.
 | *network_not_allowed* (403) | The request came from a public internet address. Intended; see [Security model](#security-model). |
 | *origin_mismatch* | Behind a proxy or with a different name than expected: set `PANEL_PUBLIC_ORIGIN`. |
 | Cannot sign in, *login_throttled* | Too many wrong passwords. Wait, or run `scripts/manager-panel.ts unlock`. |
-| *Create backup* says agents are still running | An agent is working. Retry later, or tick *Back up even if agents are running*. |
+| *Create backup* seems stuck on the first phase | It is waiting for agents that are in the middle of a message, up to `PANEL_BACKUP_WAIT_SECONDS`, then it carries on. The progress bar and the file count show when it is packing. |
 | Agents fail with *Missing key limit.output* | An old panel version wrote a context limit without an output limit; apply the model once more from the current panel. |
 | Agent answers nothing, container log says no `<message>` blocks | The model does not follow NanoClaw's reply format. Use a model that follows instructions. |
 | After a model change an agent still uses the old one | Its restart failed (look in the host log for *Failed to stop session*). Run *Restart* again, or `docker rm -f` the stuck container. |
@@ -686,7 +690,7 @@ All optional, in the install's `.env` (or the environment).
 | `PANEL_TLS_CERT`, `PANEL_TLS_KEY` | unset | PEM files to serve HTTPS directly. Set both or neither. |
 | `PANEL_ALLOW_PUBLIC` | `false` | `true` accepts connections from public internet addresses. Not recommended. |
 | `PANEL_BACKUP_DIR` | `~/.local/share/nanoclaw-backups/<install>` | Where the panel keeps backups. |
-| `PANEL_BACKUP_WAIT_SECONDS` | `120` | How long a backup waits for busy agents. |
+| `PANEL_BACKUP_WAIT_SECONDS` | `60` | How long a backup waits for busy agents before going ahead anyway. |
 | `MANAGER_BACKUP_DIR` | same as above | Backups folder for the terminal tool. |
 | `MANAGER_BACKUP_KEY` | unset | The key for the terminal tool (prefer `--key-file` or the prompt). |
 
@@ -737,7 +741,8 @@ State-changing calls need the cookie, the `X-CSRF-Token` header and an `Origin` 
 | `DELETE /credentials/claude`, `/openai-key`, `/chatgpt-login` | yes | remove a stored credential; refused with 409 while in use |
 | `POST`, `GET`, `DELETE /credentials/chatgpt/login` | start: yes | ChatGPT device sign-in: start, poll for page and code, cancel |
 | `GET /backups` | no | list |
-| `POST /backups` | yes | create; the response holds the key, once |
+| `POST /backups` | yes | start a backup in the background (`202`); `force` is ignored |
+| `GET /backups/job` | no | progress of the backup; once it is done, its key, one time only |
 | `POST /backups/{id}/verify` | no | verify with a key |
 | `GET /backups/{id}/download` | yes | the encrypted file |
 | `DELETE /backups/{id}` | yes | delete |

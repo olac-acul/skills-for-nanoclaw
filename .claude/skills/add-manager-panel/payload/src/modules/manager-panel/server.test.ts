@@ -197,6 +197,7 @@ describe('request protections', () => {
       ['GET', '/api/v1/agents'],
       ['GET', '/api/v1/model'],
       ['GET', '/api/v1/backups'],
+      ['GET', '/api/v1/backups/job'],
       ['GET', '/api/v1/channels'],
     ]) {
       expect((await call(method, route)).status, route).toBe(401);
@@ -446,35 +447,87 @@ describe('model settings', () => {
   });
 });
 
+/** Start a backup and follow it to the end, as the page does; returns the final job state. */
+interface FinishedJob {
+  state: string;
+  key: string | null;
+  backup: { id: string; consistency: string };
+}
+
+async function runBackup(login: Login): Promise<FinishedJob> {
+  const started = await call('POST', '/api/v1/backups', { ...login, body: {} });
+  expect(started.status).toBe(202);
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const polled = await call('GET', '/api/v1/backups/job', login);
+    if (polled.body.job.state !== 'running') return polled.body.job;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error('the backup did not finish');
+}
+
 describe('backups', () => {
-  it('creates a backup after re-authentication, returns the key exactly once, and never lists it', async () => {
+  it('runs a backup in the background after re-authentication, returns the key exactly once, and never lists it', async () => {
     const login = await setupAdmin();
     expect((await call('POST', '/api/v1/backups', { ...login, body: {} })).body.error.code).toBe('reauth_required');
     await reauth(login);
-    const created = await call('POST', '/api/v1/backups', { ...login, body: {} });
-    expect(created.status).toBe(201);
-    expect(created.body.key).toMatch(/^([0-9a-f]{8}-){7}[0-9a-f]{8}$/);
-    expect(backend.createCalls[0]).toEqual({ waitMs: 120_000, force: false });
+    const job = await runBackup(login);
+    expect(job.state).toBe('done');
+    expect(job.key).toMatch(/^([0-9a-f]{8}-){7}[0-9a-f]{8}$/);
+    // Agents are waited for (the configured time), but never block the backup.
+    expect(backend.createCalls[0]).toEqual({ waitMs: 60_000, force: true });
+    const again = await call('GET', '/api/v1/backups/job', login);
+    expect(again.body.job).toMatchObject({ state: 'done', key: null });
+    expect(again.text).not.toContain(job.key);
     const list = await call('GET', '/api/v1/backups', login);
-    expect(list.text).not.toContain(created.body.key);
+    expect(list.text).not.toContain(job.key);
     expect(list.body.backups).toHaveLength(1);
     expect(list.body.backups[0]).toMatchObject({ release: '2.4.0', consistency: 'quiescent' });
+    expect(job.backup).toMatchObject({ release: '2.4.0', consistency: 'quiescent', created_at: expect.any(String) });
   });
 
-  it('reports busy agents and honours force', async () => {
+  it('goes ahead when agents are still working and records that the copy is best-effort', async () => {
     const login = await setupAdmin();
     await reauth(login);
     backend.busy = true;
-    expect((await call('POST', '/api/v1/backups', { ...login, body: {} })).body.error.code).toBe('agents_busy');
-    const forced = await call('POST', '/api/v1/backups', { ...login, body: { force: true } });
-    expect(forced.status).toBe(201);
-    expect(forced.body.backup.consistency).toBe('best-effort');
+    const job = await runBackup(login);
+    expect(job.state).toBe('done');
+    expect(job.backup.consistency).toBe('best-effort');
+  });
+
+  it('shows progress while it runs and starts only one backup at a time', async () => {
+    const login = await setupAdmin();
+    await reauth(login);
+    let release!: () => void;
+    backend.createGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = await call('POST', '/api/v1/backups', { ...login, body: {} });
+    expect(started.status).toBe(202);
+    expect(started.body.job).toMatchObject({ state: 'running', phase: 'waiting', wait_seconds: 60 });
+    const second = await call('POST', '/api/v1/backups', { ...login, body: {} });
+    expect(second.status).toBe(202);
+    expect(second.body.job.state).toBe('running');
+    expect(backend.createCalls).toHaveLength(1);
+    expect((await call('GET', '/api/v1/backups/job', login)).body.job.state).toBe('running');
+    release();
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const polled = await call('GET', '/api/v1/backups/job', login);
+      if (polled.body.job.state === 'done') break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect((await call('GET', '/api/v1/backups', login)).body.backups).toHaveLength(1);
+  });
+
+  it('still accepts the old force field and ignores it', async () => {
+    const login = await setupAdmin();
+    await reauth(login);
+    expect((await call('POST', '/api/v1/backups', { ...login, body: { force: false } })).status).toBe(202);
   });
 
   it('verifies with the key and gives one answer for a wrong key', async () => {
     const login = await setupAdmin();
     await reauth(login);
-    const { backup, key } = (await call('POST', '/api/v1/backups', { ...login, body: {} })).body;
+    const { backup, key } = await runBackup(login);
     const ok = await call('POST', `/api/v1/backups/${backup.id}/verify`, { ...login, body: { key } });
     expect(ok.body).toMatchObject({ ok: true, entries: 10, release: '2.4.0' });
     const bad = await call('POST', `/api/v1/backups/${backup.id}/verify`, { ...login, body: { key: '0'.repeat(64) } });
@@ -485,7 +538,7 @@ describe('backups', () => {
   it('streams a download only inside the re-authentication window', async () => {
     const login = await setupAdmin();
     await reauth(login);
-    const { backup } = (await call('POST', '/api/v1/backups', { ...login, body: {} })).body;
+    const { backup } = await runBackup(login);
     const res = await fetch(`${base}/api/v1/backups/${backup.id}/download`, { headers: { cookie: login.cookie } });
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('application/octet-stream');
@@ -499,7 +552,7 @@ describe('backups', () => {
   it('deletes after re-authentication and rejects malformed ids', async () => {
     const login = await setupAdmin();
     await reauth(login);
-    const { backup } = (await call('POST', '/api/v1/backups', { ...login, body: {} })).body;
+    const { backup } = await runBackup(login);
     expect((await call('DELETE', '/api/v1/backups/..%2F..%2Fetc%2Fpasswd', login)).status).toBe(404);
     expect((await call('DELETE', `/api/v1/backups/${backup.id}`, login)).status).toBe(204);
     expect((await call('GET', '/api/v1/backups', login)).body.backups).toEqual([]);
