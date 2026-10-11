@@ -35,7 +35,7 @@ import {
   type RouteDeps,
 } from './routes.js';
 import type { ScryptParams } from './password.js';
-import type { Session } from './sessions.js';
+import { clientKey, type Session } from './sessions.js';
 import type { PanelState } from './state.js';
 import { GUIDE_HTML } from './guide-html.js';
 import { APP_CSS, APP_JS, INDEX_HTML, UI_CSP } from './ui.js';
@@ -44,6 +44,8 @@ export const MAX_BODY_BYTES = 64 * 1024;
 const BODY_TIMEOUT_MS = 30_000;
 const COOKIE_SECURE = '__Host-manager_panel';
 const COOKIE_PLAIN = 'manager_panel';
+const MAX_RATE_BUCKETS = 2048;
+const HARD_MAX_RATE_BUCKETS = 16_384;
 const RATE_LIMITS: Readonly<Record<LimitClass, number>> = { read: 240, mutation: 30, probe: 30, login: 20 };
 
 const API_HEADERS: Readonly<Record<string, string>> = {
@@ -93,12 +95,14 @@ export function networkAllowed(remoteAddress: string | undefined, lanOnly: boole
   return !lanOnly || classifyAddress(remoteAddress ?? '') !== 'public';
 }
 
+/** The cookie's value; a name sent twice with different values (shadowed by another service) counts as absent. */
 function cookieValue(request: http.IncomingMessage, name: string): string | undefined {
+  const found = new Set<string>();
   for (const part of (request.headers.cookie ?? '').split(';')) {
     const [key, ...rest] = part.trim().split('=');
-    if (key === name) return rest.join('=');
+    if (key === name) found.add(rest.join('='));
   }
-  return undefined;
+  return found.size === 1 ? [...found][0] : undefined;
 }
 
 function readBody(request: http.IncomingMessage): Promise<unknown> {
@@ -117,8 +121,14 @@ function readBody(request: http.IncomingMessage): Promise<unknown> {
     request.on('close', () => clearTimeout(timer));
     request.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) reject(new HttpError(413, 'payload_too_large'));
-      else chunks.push(chunk);
+      if (size > MAX_BODY_BYTES) {
+        // Stop reading; the connection is closed once the 413 has been sent.
+        request.removeAllListeners('data');
+        request.pause();
+        clearTimeout(timer);
+        chunks.length = 0;
+        reject(new HttpError(413, 'payload_too_large'));
+      } else chunks.push(chunk);
     });
     request.on('end', () => {
       clearTimeout(timer);
@@ -141,7 +151,10 @@ export function createPanelServer(config: PanelServerConfig): http.Server {
   const auth = new Auth(config.state, now, config.scrypt);
   const routes = buildRoutes();
   const secure = Boolean(config.tls) || config.publicOrigin?.startsWith('https:') === true;
-  const cookieName = secure ? COOKIE_SECURE : COOKIE_PLAIN;
+  // Without TLS there is no `__Host-` protection and browsers share cookies between ports on one host name,
+  // so the name carries the listening port: two panels (or another local service) do not overwrite each other.
+  let listenPort = 0;
+  let cookieName = secure ? COOKIE_SECURE : `${COOKIE_PLAIN}_${listenPort}`;
   const attributes = secure ? 'Path=/; Secure; HttpOnly; SameSite=Strict' : 'Path=/; HttpOnly; SameSite=Strict';
   const headers: Record<string, string> = secure
     ? { ...API_HEADERS, 'strict-transport-security': 'max-age=31536000' }
@@ -163,12 +176,21 @@ export function createPanelServer(config: PanelServerConfig): http.Server {
     }),
   };
 
+  let lastSweep = 0;
+
   function limit(key: string, kind: LimitClass): void {
     const at = now();
     const bucket = windows.get(`${kind}:${key}`);
     if (!bucket || at - bucket.start >= 60_000) {
+      if (!bucket && windows.size >= MAX_RATE_BUCKETS) {
+        // Only expired windows are dropped (at most once a second); live ones keep counting.
+        if (at - lastSweep >= 1000) {
+          lastSweep = at;
+          for (const [name, window] of windows) if (at - window.start >= 60_000) windows.delete(name);
+        }
+        if (windows.size >= HARD_MAX_RATE_BUCKETS) throw new HttpError(429, 'rate_limited', { 'retry-after': '60' });
+      }
       windows.set(`${kind}:${key}`, { start: at, count: 1 });
-      if (windows.size > 2048) windows.clear();
       return;
     }
     bucket.count += 1;
@@ -214,10 +236,12 @@ export function createPanelServer(config: PanelServerConfig): http.Server {
       }
       if (route.reauth && !auth.sessions.hasReauth(session)) throw new HttpError(403, 'reauth_required');
     }
-    limit(session ? session.csrf.slice(0, 16) : (request.socket.remoteAddress ?? 'unknown'), route.limit);
+    const address = request.socket.remoteAddress ?? 'unknown';
+    // Before login the key is the client (a whole /64 for IPv6), so a host cannot mint buckets by rotating addresses.
+    limit(session ? session.csrf.slice(0, 16) : clientKey(address), route.limit);
 
     const body = route.method === 'GET' ? route.parse(undefined) : route.parse(await readBody(request));
-    return route.run({ params, body, session, token, deps });
+    return route.run({ params, body, session, token, address, deps });
   }
 
   function sendJson(
@@ -235,6 +259,8 @@ export function createPanelServer(config: PanelServerConfig): http.Server {
       'content-type': type,
       'cache-control': 'no-store',
       'content-security-policy': UI_CSP,
+      'cross-origin-opener-policy': 'same-origin',
+      'cross-origin-resource-policy': 'same-origin',
       'x-content-type-options': 'nosniff',
       'x-frame-options': 'DENY',
       'referrer-policy': 'no-referrer',
@@ -284,12 +310,15 @@ export function createPanelServer(config: PanelServerConfig): http.Server {
         const failure = toHttpError(error);
         status = failure.status;
         if (failure.status >= 500) config.onError?.(error);
+        const oversized = failure.status === 413;
         sendJson(
           response,
           failure.status,
           { error: { code: failure.code, request_id: id, ...(failure.detail ? { detail: failure.detail } : {}) } },
-          failure.headers,
+          oversized ? { ...failure.headers, connection: 'close' } : failure.headers,
         );
+        // The rest of an oversized body is never read: drop the connection once the answer is out.
+        if (oversized) response.once('finish', () => request.destroy());
       } finally {
         if (seen.route?.mutating) {
           try {
@@ -311,6 +340,11 @@ export function createPanelServer(config: PanelServerConfig): http.Server {
   const server = config.tls
     ? https.createServer({ cert: config.tls.cert, key: config.tls.key, minVersion: 'TLSv1.2' }, listener)
     : http.createServer(listener);
+  server.on('listening', () => {
+    const address = server.address();
+    if (address && typeof address === 'object') listenPort = address.port;
+    if (!secure) cookieName = `${COOKIE_PLAIN}_${listenPort}`;
+  });
   server.headersTimeout = 15_000;
   server.requestTimeout = 0; // downloads may be long; JSON bodies have their own deadline
   server.keepAliveTimeout = 5_000;

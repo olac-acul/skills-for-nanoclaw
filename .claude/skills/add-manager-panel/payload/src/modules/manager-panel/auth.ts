@@ -1,6 +1,8 @@
 /**
- * Login, first-run setup and re-authentication, all behind one global throttle
- * (there is a single administrator account).
+ * Login, first-run setup and re-authentication. Failures are throttled per
+ * client address first; a high global ceiling sits behind that (there is a
+ * single administrator account), and a valid session may still re-authenticate
+ * while it is on.
  */
 import { timingSafeEqual } from 'node:crypto';
 
@@ -13,7 +15,7 @@ import {
   verifyPassword,
   type ScryptParams,
 } from './password.js';
-import { LoginThrottle, SessionStore, type Session } from './sessions.js';
+import { LoginThrottle, SessionStore, clientKey, type Session } from './sessions.js';
 import type { PanelState } from './state.js';
 
 export class AuthError extends Error {
@@ -26,10 +28,16 @@ export class AuthError extends Error {
   }
 }
 
+/** Password checks run scrypt (~128 MiB each): only a few at once, and one per client. */
+const MAX_CONCURRENT_CHECKS = 3;
+
 export class Auth {
   readonly sessions: SessionStore;
   private readonly throttle: LoginThrottle;
   private readonly scrypt: ScryptParams;
+  private checking = 0;
+  private readonly checkingClients = new Set<string>();
+  private settingUp = false;
 
   constructor(
     private readonly state: PanelState,
@@ -49,51 +57,83 @@ export class Auth {
     return this.state.admin() === null;
   }
 
-  private assertNotThrottled(): void {
-    const wait = this.throttle.waitMs();
+  private assertNotThrottled(client: string, ignoreGlobal = false): void {
+    const wait = this.throttle.waitMs(client, ignoreGlobal);
     if (wait > 0) throw new AuthError(429, 'login_throttled', Math.ceil(wait / 1000));
   }
 
-  /** Check the password under the throttle; the failure is the same whatever the reason. */
-  private async checkPassword(password: string): Promise<void> {
-    this.assertNotThrottled();
-    const admin = this.state.admin();
-    if (!(await verifyPassword(password, admin?.password ?? null))) {
-      this.throttle.failure();
-      throw new AuthError(401, 'invalid_credentials');
+  /**
+   * Check the password under the throttle; the failure is the same whatever the reason. `holdsSession` is a
+   * caller that already has a valid session (re-authentication): the global ceiling does not stop it.
+   */
+  private async checkPassword(password: string, address: string, holdsSession = false): Promise<void> {
+    const client = clientKey(address);
+    this.assertNotThrottled(client, holdsSession);
+    if (this.checking >= MAX_CONCURRENT_CHECKS || this.checkingClients.has(client)) {
+      throw new AuthError(429, 'login_busy', 1);
     }
-    this.throttle.success();
-    if (admin && needsRehash(admin.password, this.scrypt)) {
-      this.state.setPassword(await hashPassword(password, this.scrypt), new Date(this.now()));
+    this.checking += 1;
+    this.checkingClients.add(client);
+    try {
+      const admin = this.state.admin();
+      const valid = await verifyPassword(password, admin?.password ?? null);
+      if (!valid) {
+        this.throttle.failure(client);
+        throw new AuthError(401, 'invalid_credentials');
+      }
+      // Other attempts may have tripped a lock while the hash was being computed.
+      this.assertNotThrottled(client, holdsSession);
+      this.throttle.success(client);
+      if (admin && needsRehash(admin.password, this.scrypt)) {
+        const upgraded = await hashPassword(password, this.scrypt);
+        // Write only if nobody changed the credential meanwhile (a `reset-password` run must win).
+        const current = this.state.admin();
+        if (current && current.password === admin.password && current.generation === admin.generation) {
+          this.state.replaceHash(upgraded, new Date(this.now()));
+        }
+      }
+    } finally {
+      this.checking -= 1;
+      this.checkingClients.delete(client);
     }
   }
 
-  async login(password: string, previousToken?: string): Promise<{ token: string; session: Session }> {
-    await this.checkPassword(password);
+  async login(password: string, address: string, previousToken?: string): Promise<{ token: string; session: Session }> {
+    await this.checkPassword(password, address);
     this.sessions.destroy(previousToken);
     return this.sessions.create(this.generation());
   }
 
-  async setup(code: string, password: string): Promise<{ token: string; session: Session }> {
+  async setup(code: string, password: string, address: string): Promise<{ token: string; session: Session }> {
     if (this.state.admin()) throw new AuthError(409, 'already_configured');
-    this.assertNotThrottled();
+    const client = clientKey(address);
+    this.assertNotThrottled(client);
     const pending = this.state.setupCode(new Date(this.now()));
     const given = Buffer.from(normalizeSetupCode(code));
     const expected = Buffer.from(pending?.code ?? '');
     if (!pending || given.length !== expected.length || !timingSafeEqual(given, expected)) {
-      this.throttle.failure();
+      this.throttle.failure(client);
       throw new AuthError(401, 'invalid_setup_code');
     }
     const problem = passwordProblem(password);
     if (problem) throw new AuthError(400, `password_${problem}`);
-    this.state.setPassword(await hashPassword(password, this.scrypt), new Date(this.now()));
-    this.state.clearSetupCode();
-    this.throttle.success();
-    return this.sessions.create(this.generation());
+    // The code is valid and nothing has awaited yet: only one setup may be in progress.
+    if (this.settingUp) throw new AuthError(409, 'setup_in_progress');
+    this.settingUp = true;
+    try {
+      const hash = await hashPassword(password, this.scrypt);
+      if (this.state.admin()) throw new AuthError(409, 'already_configured');
+      this.state.setPassword(hash, new Date(this.now()));
+      this.state.clearSetupCode();
+      this.throttle.success(client);
+      return this.sessions.create(this.generation());
+    } finally {
+      this.settingUp = false;
+    }
   }
 
-  async reauth(session: Session, password: string): Promise<void> {
-    await this.checkPassword(password);
+  async reauth(session: Session, password: string, address: string): Promise<void> {
+    await this.checkPassword(password, address, true);
     this.sessions.markReauth(session);
   }
 }

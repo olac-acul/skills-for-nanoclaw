@@ -8,7 +8,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { CANARY, fakeBackend, type FakeBackend } from './fixtures/fake-backend.js';
-import { generateSetupCode } from './password.js';
+import { generateSetupCode, hashPassword } from './password.js';
 import { createPanelServer } from './server.js';
 import { PanelState } from './state.js';
 
@@ -307,6 +307,177 @@ describe('request protections', () => {
   });
 });
 
+/** Like call(), but from another local source address, so the server sees another client. */
+function callFrom(
+  source: string,
+  method: string,
+  pathname: string,
+  body?: unknown,
+  extra: Record<string, string> = {},
+): Promise<{ status: number; code?: string; headers: http.IncomingHttpHeaders }> {
+  return new Promise((resolve, reject) => {
+    const payload = body === undefined ? undefined : JSON.stringify(body);
+    const request = httpRequest(
+      {
+        host: '127.0.0.1',
+        port: Number(new URL(base).port),
+        localAddress: source,
+        path: pathname,
+        method,
+        headers: {
+          origin: base,
+          ...(payload ? { 'content-type': 'application/json' } : {}),
+          ...extra,
+        },
+      },
+      (response) => {
+        const parts: Buffer[] = [];
+        response.on('data', (part: Buffer) => parts.push(part));
+        response.on('end', () => {
+          let code: string | undefined;
+          try {
+            code = JSON.parse(Buffer.concat(parts).toString('utf8'))?.error?.code;
+            // eslint-disable-next-line no-catch-all/no-catch-all -- not every reply is JSON
+          } catch {
+            code = undefined;
+          }
+          resolve({ status: response.statusCode ?? 0, code, headers: response.headers });
+        });
+      },
+    );
+    request.on('error', reject);
+    request.end(payload);
+  });
+}
+
+describe('login lockout', () => {
+  it('locks only the client that keeps guessing: another address and a signed-in session are not affected', async () => {
+    const login = await setupAdmin();
+    for (let i = 0; i < 7; i++)
+      await callFrom('127.0.0.2', 'POST', '/api/v1/session', { password: 'wrong password!!' });
+    expect((await callFrom('127.0.0.2', 'POST', '/api/v1/session', { password: PASSWORD })).code).toBe(
+      'login_throttled',
+    );
+    // The administrator, from another address, can still sign in and re-authenticate.
+    const other = await callFrom('127.0.0.3', 'POST', '/api/v1/session', { password: PASSWORD });
+    expect(other.status).toBe(200);
+    await reauth(login);
+    // The attacker is free again after the lock expires, and the persisted ceiling is far from tripped.
+    expect(state.throttle().locked_until).toBeNull();
+    clock += 61_000;
+    expect((await callFrom('127.0.0.2', 'POST', '/api/v1/session', { password: PASSWORD })).status).toBe(200);
+  });
+
+  it('counts a failed setup code against the address too', async () => {
+    state.ensureSetupCode(new Date(clock), () => 'AAAA-BBBB-CCCC-DDDD', 60_000);
+    for (let i = 0; i < 6; i++)
+      await callFrom('127.0.0.2', 'POST', '/api/v1/setup', { code: 'ZZZZ-ZZZZ-ZZZZ-ZZZZ', password: PASSWORD });
+    expect(
+      (await callFrom('127.0.0.2', 'POST', '/api/v1/setup', { code: 'AAAA-BBBB-CCCC-DDDD', password: PASSWORD })).code,
+    ).toBe('login_throttled');
+    expect(
+      (await callFrom('127.0.0.3', 'POST', '/api/v1/setup', { code: 'AAAA-BBBB-CCCC-DDDD', password: PASSWORD }))
+        .status,
+    ).toBe(200);
+  });
+
+  it('keeps a persisted global ceiling for many addresses, which a signed-in session can still bypass', async () => {
+    const login = await setupAdmin();
+    state.setThrottle({ failures: 60, locked_until: new Date(clock + 600_000).toISOString() });
+    expect((await call('POST', '/api/v1/session', { body: { password: PASSWORD } })).body.error.code).toBe(
+      'login_throttled',
+    );
+    await reauth(login);
+  });
+
+  it('runs only one password check at a time per address and a few overall', async () => {
+    await setupAdmin();
+    const burst = await Promise.all(
+      Array.from({ length: 4 }, () => call('POST', '/api/v1/session', { body: { password: 'wrong password!!' } })),
+    );
+    expect(burst.map((r) => r.status).sort()).toEqual([401, 429, 429, 429]);
+    expect(burst.find((r) => r.status === 429)!.body.error.code).toBe('login_busy');
+  });
+});
+
+describe('credential races', () => {
+  it('lets only one of two concurrent first-run setups succeed', async () => {
+    const record = state.ensureSetupCode(new Date(clock), generateSetupCode, 60_000);
+    const body = { code: record.code, password: PASSWORD };
+    const results = await Promise.all([
+      callFrom('127.0.0.2', 'POST', '/api/v1/setup', body),
+      callFrom('127.0.0.3', 'POST', '/api/v1/setup', body),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect(state.admin()?.generation).toBe(1);
+  });
+
+  it('upgrading an older hash on re-authentication keeps the generation and the calling session', async () => {
+    await new Promise((resolve) => server.close(resolve));
+    await start({ scrypt: { N: 2 ** 15, r: 8, p: 1 } });
+    const login = await setupAdmin();
+    state.replaceHash(await hashPassword(PASSWORD, FAST_SCRYPT), new Date(clock));
+    const before = state.admin()!;
+    await reauth(login);
+    const after = state.admin()!;
+    expect(after.password).not.toBe(before.password);
+    expect(after.generation).toBe(before.generation);
+    expect((await call('GET', '/api/v1/session', login)).status).toBe(200);
+  });
+});
+
+describe('transport hardening', () => {
+  it('reads a duplicated session cookie as absent instead of picking one', async () => {
+    const login = await setupAdmin();
+    const name = login.cookie.split('=')[0];
+    expect(
+      (await call('GET', '/api/v1/session', { csrf: login.csrf, headers: { cookie: `${login.cookie}; ${name}=x` } }))
+        .status,
+    ).toBe(401);
+    expect((await call('GET', '/api/v1/session', login)).status).toBe(200);
+  });
+
+  it('names the plain cookie after the listening port', async () => {
+    const login = await setupAdmin();
+    expect(login.cookie.startsWith(`manager_panel_${new URL(base).port}=`)).toBe(true);
+  });
+
+  it('answers an oversized body with 413 and closes the connection', async () => {
+    const closed = new Promise<number>((resolve, reject) => {
+      const request = httpRequest(
+        {
+          host: '127.0.0.1',
+          port: Number(new URL(base).port),
+          path: '/api/v1/session',
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: base, 'transfer-encoding': 'chunked' },
+        },
+        (response) => {
+          response.resume();
+          response.socket.on('close', () => resolve(response.statusCode ?? 0));
+        },
+      );
+      request.on('error', () => undefined);
+      request.write('"' + 'a'.repeat(70 * 1024));
+      setTimeout(() => request.destroy(), 3000).unref();
+      void reject;
+    });
+    expect(await closed).toBe(413);
+  });
+
+  it('carries the cross-origin isolation headers on static pages too', async () => {
+    const res = await fetch(base + '/');
+    expect(res.headers.get('cross-origin-opener-policy')).toBe('same-origin');
+    expect(res.headers.get('cross-origin-resource-policy')).toBe('same-origin');
+  });
+
+  it('does not let a flood of new addresses wipe the live rate-limit buckets', async () => {
+    // 30 failed logins inside one minute from one client exhaust the 20/min login bucket.
+    for (let i = 0; i < 21; i++) await callFrom('127.0.0.9', 'POST', '/api/v1/session', { password: 'x' });
+    expect((await callFrom('127.0.0.9', 'POST', '/api/v1/session', { password: 'x' })).code).toBe('rate_limited');
+  });
+});
+
 describe('cookies', () => {
   it('uses a plain cookie and flags the connection over HTTP', async () => {
     const res = await call('POST', '/api/v1/setup', {
@@ -316,7 +487,7 @@ describe('cookies', () => {
       })(),
     });
     const cookie = res.headers.get('set-cookie')!;
-    expect(cookie).toMatch(/^manager_panel=/);
+    expect(cookie).toMatch(/^manager_panel_\d+=/);
     expect(cookie).toContain('HttpOnly');
     expect(cookie).toContain('SameSite=Strict');
     expect(cookie).not.toContain('Secure');
