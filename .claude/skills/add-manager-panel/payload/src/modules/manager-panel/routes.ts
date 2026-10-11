@@ -628,6 +628,7 @@ function backupView(record: {
   release: string;
   consistency: string;
   machineIdentity: boolean;
+  trigger?: string;
 }): Record<string, unknown> {
   return {
     id: record.id,
@@ -636,6 +637,7 @@ function backupView(record: {
     release: record.release,
     consistency: record.consistency,
     machine_identity: record.machineIdentity,
+    trigger: record.trigger === 'scheduled' ? 'scheduled' : 'manual',
   };
 }
 

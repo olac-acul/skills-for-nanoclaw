@@ -188,7 +188,7 @@ var T = {
     phase_snapshot: 'Copying the database…', phase_pack: 'Packing and encrypting: {files} files, {size} so far.',
     doneTitle: 'Backup complete', doneNoKey: 'The last backup finished and its key was already shown. If you did not save it, create a new backup.',
     bestEffort: 'Some agents were still working while the backup ran. Every database file is consistent on its own, but the files were not copied at the same instant. For a perfectly consistent copy, stop NanoClaw first.',
-    consAgentsIdle: 'Agents idle', consAgentsWorking: 'Agents were working', consStopped: 'NanoClaw stopped',
+    scheduled: 'Scheduled', consAgentsIdle: 'Agents idle', consAgentsWorking: 'Agents were working', consStopped: 'NanoClaw stopped',
     note: 'Restoring is done from a terminal, with NanoClaw stopped.', restoreHelp: 'How to restore', keyHelp: 'About the key', consistencyHelp: 'Consistency levels', retentionHelp: 'Retention and pruning', moveHelp: 'Moving to another machine',
   },
   errors: {
@@ -596,7 +596,7 @@ function viewBackups() {
         var verify = h('button', { type: 'button', onclick: function () { verifyDialog(b.id); } }, T.backups.verify);
         var download = h('button', { type: 'button', onclick: function () { clear(out); ensureReauth().then(function () { window.location.href = '/api/v1/backups/' + b.id + '/download'; }).catch(function (err) { fail(out, err); }); } }, T.backups.download);
         var del = h('button', { class: 'danger', type: 'button', onclick: function () { if (!window.confirm(T.backups.confirmDelete)) return; clear(out); ensureReauth().then(function () { return api('DELETE', '/backups/' + b.id); }).then(load).catch(function (err) { fail(out, err); }); } }, T.backups.del);
-        body.appendChild(h('tr', {}, h('td', {}, fmtDate(b.created_at)), h('td', {}, fmtBytes(b.bytes)), h('td', {}, b.release), h('td', {}, consLabel(b.consistency)), h('td', {}, h('div', { class: 'row' }, verify, download, del))));
+        body.appendChild(h('tr', {}, h('td', {}, fmtDate(b.created_at), b.trigger === 'scheduled' ? ' ' : null, b.trigger === 'scheduled' ? h('span', { class: 'pill ok' }, T.backups.scheduled) : null), h('td', {}, fmtBytes(b.bytes)), h('td', {}, b.release), h('td', {}, consLabel(b.consistency)), h('td', {}, h('div', { class: 'row' }, verify, download, del))));
       });
       box.appendChild(h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, T.backups.created), h('th', {}, T.backups.size), h('th', {}, T.backups.release), h('th', {}, T.backups.consistency), h('th', {}, T.backups.actions))), body));
     }).catch(function (err) { clear(box); fail(box, err); });

@@ -106,3 +106,54 @@ describe('verify / delete / prune', () => {
     expect(svc.list().map((entry) => entry.id.slice(0, 8))).toEqual(['20260903', '20260902', '20260901', '20260810']);
   });
 });
+
+describe('scheduled backups', () => {
+  it('uses the key it is given, records who started it, and a manual backup is recorded as manual', async () => {
+    const svc = service();
+    const { generateKey, formatKey } = await import('./crypto.js');
+    const key = generateKey();
+    const scheduled = await svc.create({ hostStopped: true, key, trigger: 'scheduled' });
+    expect(scheduled.key).toBe(formatKey(key));
+    expect(scheduled.record.trigger).toBe('scheduled');
+    expect((await readManifest(svc.fileFor(scheduled.record.id), key)).id).toBe(scheduled.record.id);
+    const manual = await svc.create({ hostStopped: true });
+    expect(manual.record.trigger).toBe('manual');
+    expect(svc.list().map((entry) => entry.trigger)).toEqual(['manual', 'scheduled']);
+  });
+
+  it('keeps the newest scheduled backups and never touches manual ones', async () => {
+    const svc = service();
+    const { generateKey } = await import('./crypto.js');
+    const key = generateKey();
+    const made: string[] = [];
+    for (let index = 0; index < 4; index++) {
+      made.push((await svc.create({ hostStopped: true, key, trigger: 'scheduled' })).record.id);
+      await new Promise((resolve) => setTimeout(resolve, 1100)); // ids carry the second
+    }
+    const manual = (await svc.create({ hostStopped: true })).record.id;
+    expect(svc.pruneScheduled(2)).toEqual([made[1], made[0]]);
+    const left = svc.list().map((entry) => entry.id);
+    expect(left).toContain(manual);
+    expect(left).toContain(made[3]);
+    expect(left).toContain(made[2]);
+    expect(left).not.toContain(made[0]);
+    expect(left).toHaveLength(3);
+    expect(svc.pruneScheduled(2)).toEqual([]);
+  }, 30_000);
+
+  it('treats a backup whose sidecar has no trigger as manual', async () => {
+    const svc = service();
+    const { record } = await svc.create({ hostStopped: true });
+    const meta = path.join(tmp, 'backups', `${record.id}.meta.json`);
+    const stored = JSON.parse(fs.readFileSync(meta, 'utf8'));
+    delete stored.trigger;
+    fs.writeFileSync(meta, JSON.stringify(stored));
+    expect(svc.pruneScheduled(1)).toEqual([]);
+    expect(svc.list()).toHaveLength(1);
+  });
+
+  it('refuses a keep value that is not a positive whole number', () => {
+    const svc = service();
+    for (const bad of [0, -1, 1.5, Number.NaN]) expect(() => svc.pruneScheduled(bad)).toThrow(BackupError);
+  });
+});

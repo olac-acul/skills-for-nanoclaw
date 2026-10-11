@@ -3,6 +3,13 @@
 Reverses everything the skill added. Backups you created are your data and are
 not touched; delete them yourself if you want them gone.
 
+0. If you set up scheduled backups, remove their timer first (the key file and the backups stay):
+
+   ```bash
+   pnpm exec tsx scripts/manager-backup.ts schedule remove
+   rm -f ~/.config/nanoclaw/scheduled-backup.key   # only if you no longer need to open those backups
+   ```
+
 1. Delete the copied files (there is nothing to un-register: the skill appended
    nothing to any barrel):
 
@@ -24,6 +31,8 @@ src/modules/manager-backup/fixtures/synthetic-install.ts
 src/modules/manager-backup/host.ts
 src/modules/manager-backup/restore.test.ts
 src/modules/manager-backup/restore.ts
+src/modules/manager-backup/schedule.test.ts
+src/modules/manager-backup/schedule.ts
 src/modules/manager-backup/service.test.ts
 src/modules/manager-backup/service.ts
 src/modules/manager-backup/tar.test.ts

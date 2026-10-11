@@ -57,6 +57,8 @@ payload/src/modules/manager-backup/fixtures/synthetic-install.ts -> src/modules/
 payload/src/modules/manager-backup/host.ts -> src/modules/manager-backup/host.ts
 payload/src/modules/manager-backup/restore.test.ts -> src/modules/manager-backup/restore.test.ts
 payload/src/modules/manager-backup/restore.ts -> src/modules/manager-backup/restore.ts
+payload/src/modules/manager-backup/schedule.test.ts -> src/modules/manager-backup/schedule.test.ts
+payload/src/modules/manager-backup/schedule.ts -> src/modules/manager-backup/schedule.ts
 payload/src/modules/manager-backup/service.test.ts -> src/modules/manager-backup/service.test.ts
 payload/src/modules/manager-backup/service.ts -> src/modules/manager-backup/service.ts
 payload/src/modules/manager-backup/tar.test.ts -> src/modules/manager-backup/tar.test.ts
@@ -103,6 +105,17 @@ or the hidden prompt; it is never accepted as a command-line argument.
 **While the host runs** the backup is still safe (each database file is copied
 consistently) but the files are not copied at the same instant, so it is
 recorded as `best-effort`. Stop the service first for a `cold` backup.
+
+**Scheduled backups.** A weekly backup that needs no person: a systemd user timer runs
+`scheduled --keep N`, which waits briefly for idle agents, backs up, and deletes scheduled backups beyond the
+newest N (manual ones are never deleted). It uses one key of its own, created once and kept in a `0600` file;
+see the guide's *Scheduled backups*.
+
+```bash
+pnpm exec tsx scripts/manager-backup.ts schedule init-key      # prints the key once
+pnpm exec tsx scripts/manager-backup.ts schedule install --keep 3 --weekday Sun --time 03:30
+pnpm exec tsx scripts/manager-backup.ts schedule status
+```
 
 ## Restore
 

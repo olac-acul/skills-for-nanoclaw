@@ -37,6 +37,8 @@ export interface BackupRecord {
   files: number;
   contentBytes: number;
   machineIdentity: boolean;
+  /** `scheduled` for a backup made by the timer; absent (older sidecars) or `manual` otherwise. */
+  trigger?: 'manual' | 'scheduled';
 }
 
 export interface CreateOptions {
@@ -50,6 +52,10 @@ export interface CreateOptions {
   force?: boolean;
   /** The caller has stopped the host (CLI use). */
   hostStopped?: boolean;
+  /** Encrypt with this key instead of a fresh random one (scheduled backups). */
+  key?: Buffer;
+  /** Who started it; recorded in the sidecar. Defaults to manual. */
+  trigger?: 'manual' | 'scheduled';
   onProgress?: Parameters<typeof createBundle>[0]['onProgress'];
 }
 
@@ -103,7 +109,7 @@ export class BackupService {
       }
     }
 
-    const key = generateKey();
+    const key = options.key ?? generateKey();
     const id = newBackupId();
     fs.mkdirSync(this.options.backupsDir, { recursive: true, mode: 0o700 });
     const file = this.bundlePath(id);
@@ -125,12 +131,17 @@ export class BackupService {
     // Agents that started while the snapshot ran make the result best-effort.
     const agentsNow = counter ? counter() : 0;
     const consistency = !options.hostStopped && agentsNow > 0 ? 'best-effort' : manifest.consistency;
-    const record = this.toRecord(manifest, fs.statSync(file).size, consistency);
+    const record = this.toRecord(manifest, fs.statSync(file).size, consistency, options.trigger ?? 'manual');
     fs.writeFileSync(this.metaPath(id), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
     return { record, key: formatKey(key) };
   }
 
-  private toRecord(manifest: BundleManifest, bytes: number, consistency: BundleManifest['consistency']): BackupRecord {
+  private toRecord(
+    manifest: BundleManifest,
+    bytes: number,
+    consistency: BundleManifest['consistency'],
+    trigger: 'manual' | 'scheduled',
+  ): BackupRecord {
     return {
       id: manifest.id,
       createdAt: manifest.createdAt,
@@ -142,6 +153,7 @@ export class BackupService {
       files: manifest.contents.files,
       contentBytes: manifest.contents.bytes,
       machineIdentity: manifest.identities.machineIdentityIncluded,
+      trigger,
     };
   }
 
@@ -181,6 +193,19 @@ export class BackupService {
     const file = this.fileFor(id);
     fs.rmSync(file);
     fs.rmSync(this.metaPath(id), { force: true });
+  }
+
+  /** Keep the newest `keep` scheduled backups and delete older scheduled ones. Manual backups are never touched. */
+  pruneScheduled(keep: number): string[] {
+    if (!Number.isInteger(keep) || keep < 1)
+      throw new BackupError('invalid_id', 'keep must be a positive whole number');
+    const scheduled = this.list().filter((record) => record.trigger === 'scheduled');
+    const removed: string[] = [];
+    for (const record of scheduled.slice(keep)) {
+      this.delete(record.id);
+      removed.push(record.id);
+    }
+    return removed;
   }
 
   /** Keep the newest `keepLast`, plus the newest of each of the `keepMonthly` most recent older months. */

@@ -479,8 +479,40 @@ pnpm exec tsx scripts/manager-backup.ts prune --keep-last 7 --keep-monthly 6
 Keep copies on **another disk or machine**: a backup next to the data it protects does not protect
 against losing the disk. A downloaded or copied `.mbk` file is all you need besides its key.
 
-Backups from the panel need the panel's reauthentication and a person to save the key. Unattended
-scheduled backups are not provided: they would require storing the key next to the backups.
+Backups from the panel need the panel's reauthentication and a person to save the key. For backups
+nobody has to start, see [Scheduled backups](#scheduled-backups).
+
+### Scheduled backups
+
+A weekly backup that runs by itself, from a systemd timer of the install's user. Run these in the install
+folder, as the NanoClaw user:
+
+```bash
+pnpm exec tsx scripts/manager-backup.ts schedule init-key
+pnpm exec tsx scripts/manager-backup.ts schedule install --keep 3 --weekday Sun --time 03:30
+sudo loginctl enable-linger "$USER"      # once: lets the timer run without a login
+```
+
+- **The key.** Nobody is there to save a different key each week, so scheduled backups share **one key of
+  their own**. `init-key` creates it, prints it **once** (store a copy in a password manager) and keeps it in
+  `~/.config/nanoclaw/scheduled-backup.key`, readable by you only, outside the backups folder. Anyone who has
+  that key and a backup can open the backup, so if a backup leaves this machine, take the key's copy with
+  you separately. Without the key a scheduled backup cannot be opened, so losing it loses them all.
+  `init-key` never replaces an existing key.
+- **What a run does.** It waits up to five minutes for agents that are in the middle of a message, then
+  backs up anyway (the backup says whether it was `quiescent` or `best-effort`), then deletes scheduled
+  backups beyond the newest `--keep`. **Manual backups are never deleted by it.** It refuses to start when the
+  disk is too full for another backup, and keeps the older ones if a new one fails.
+- **When.** The time is the machine's local time, with up to ten minutes of random delay. If the machine
+  was off at that time, the backup runs at the next start (`Persistent`).
+- **Look at it.** `schedule status` shows the key, the timer, the next run and the scheduled backups kept.
+  The log of a run is in the journal: `journalctl --user -u nanoclaw-backup-<install>.service`.
+  The panel marks scheduled backups with a *Scheduled* label.
+- **Restore.** Use the scheduled key like any other: `restore <id> --key-file
+  ~/.config/nanoclaw/scheduled-backup.key`, or paste it from the password manager on another machine.
+- **Disk space.** Each backup is about the size of the install's data. With `--keep 3` plan for four
+  copies at the moment a new one is being written. Copy backups to **another disk or machine** too.
+- **Stop it.** `schedule remove` removes the timer and leaves the key file and the backups.
 
 ### Restoring a backup
 
@@ -568,6 +600,7 @@ folder as the NanoClaw user.
 | Restore a backup, roll back a restore | [Restoring a backup](#restoring-a-backup) |
 | Test a backup on another machine | [Rehearsal restore](#rehearsal-restore) |
 | Prune old backups | [Retention and pruning](#retention-and-pruning) |
+| Back up every week without a person | [Scheduled backups](#scheduled-backups) |
 | Open the panel to the network or enable HTTPS | [HTTPS and network access](#https-and-network-access) |
 | Add channels and agents | [Channels and agents](#channels-and-agents) |
 | Update NanoClaw | [Updating NanoClaw](#updating-nanoclaw) |
@@ -704,6 +737,8 @@ scripts/manager-backup.ts restore <id|file> [--rehearsal] [--machine-identity] [
 scripts/manager-backup.ts commit <transaction>
 scripts/manager-backup.ts rollback <transaction>
 scripts/manager-backup.ts prune [--keep-last N] [--keep-monthly N]
+scripts/manager-backup.ts schedule init-key | install [--keep N] [--weekday Sun] [--time HH:MM] | status | remove
+scripts/manager-backup.ts scheduled [--keep N]        (what the timer runs)
         (all accept --dir <folder> and --key-file <path>)
 
 scripts/manager-panel.ts setup-code | reset-password | revoke-sessions | unlock | status

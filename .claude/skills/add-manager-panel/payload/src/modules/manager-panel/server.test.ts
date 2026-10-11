@@ -485,6 +485,20 @@ describe('backups', () => {
     expect(job.backup).toMatchObject({ release: '2.4.0', consistency: 'quiescent', created_at: expect.any(String) });
   });
 
+  it('tells scheduled backups from manual ones in the list', async () => {
+    const login = await setupAdmin();
+    await reauth(login);
+    await runBackup(login);
+    backend.records.push({
+      ...backend.records[0],
+      id: '20261002T130000Z-123456',
+      createdAt: '2026-10-02T13:00:00.000Z',
+      trigger: 'scheduled',
+    });
+    const list = (await call('GET', '/api/v1/backups', login)).body.backups;
+    expect(list.map((entry: { trigger: string }) => entry.trigger)).toEqual(['scheduled', 'manual']);
+  });
+
   it('goes ahead when agents are still working and records that the copy is best-effort', async () => {
     const login = await setupAdmin();
     await reauth(login);
