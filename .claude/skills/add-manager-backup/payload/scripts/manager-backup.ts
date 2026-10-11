@@ -357,7 +357,7 @@ async function main(): Promise<void> {
       const stopped = !(await hostIsRunning(host));
       if (!stopped)
         console.error(
-          'Note: the host is running; the backup will be best-effort (each database file is still consistent).',
+          'Note: the host is running. The backup waits briefly for agents that are mid-message and is recorded as quiescent or best-effort; each database file is consistent either way.',
         );
       const { record, key } = await service.create({
         includeMachineIdentity: flags.has('machine-identity'),

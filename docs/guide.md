@@ -191,8 +191,11 @@ from the one the panel expects: set `PANEL_PUBLIC_ORIGIN` exactly to what the ad
 ## Using the dashboard
 
 Sign in with the administrator password. Sessions end after 30 minutes without activity or 8 hours in
-total. Wrong passwords: five are free, then every further failure doubles a lock (one minute, two,
-four, up to an hour). Sensitive actions (applying a model, creating, downloading or deleting a
+total. Wrong passwords are counted **per address** (a whole `/64` for IPv6): five are free, then every further
+failure from that address doubles a lock (one minute, two, four, up to an hour), so one device on the
+network cannot lock the administrator out from another. A high overall ceiling (50 failures in an hour,
+kept across restarts) still stops a flood from many addresses; a valid session can always confirm its
+password, even then. Sensitive actions (applying a model, creating, downloading or deleting a
 backup) ask for the password again if you have not typed it in the last five minutes.
 
 ### Overview
@@ -374,6 +377,14 @@ As with ChatGPT, the panel cannot check a model name against Anthropic. Use the 
 gives (for example `claude-haiku-4-5-20251001`); a short or invented name such as `haiku-4.5` makes every
 agent answer with *There's an issue with the selected model*.
 
+**A note on replacing a Claude key.** When a key is already stored, the panel replaces it in place, which
+keeps the secret's identity and the agents' access to it. The gateway's command line only accepts the new
+value as an argument, so for the fraction of a second the call lasts the value is visible to other users
+of the same machine through the process list. On a machine only you use this does not matter; on a shared
+one, enter the key with a person-only terminal tool or remove the credential first and save it again (a
+new secret is created through a private file, never on a command line). The panel only touches a secret of
+type *Anthropic* or named exactly *Anthropic*.
+
 ### Removing a credential
 
 Next to each stored credential there is a **Remove** button (click it twice, then confirm your
@@ -414,7 +425,7 @@ output limit.
 | *The endpoint does not list that model* | The model name differs from what `/v1/models` returns. Pick one from the suggestions. |
 | *The endpoint wants an API key* | See [API keys](#api-keys). |
 | *Plain HTTP is only accepted for local addresses* | Use HTTPS for a public host, or a local address. |
-| *That address is not allowed* | Link-local, multicast or reserved address. |
+| *That address is not allowed* | Link-local, multicast, cloud metadata or other reserved address, including NAT64, 6to4 and Teredo forms. |
 | *The name could not be resolved* | DNS does not know the host name from the NanoClaw machine. |
 | *The TLS certificate could not be verified* | Self-signed or expired certificate on an HTTPS endpoint. |
 | *The endpoint did not answer like an OpenAI-compatible API* | The URL is not the API root (often missing `/v1`). |
@@ -548,6 +559,20 @@ Facts to know:
   (never the values). The restore lists the ones this machine does not have yet, for example
   `OpenCode openai, Anthropic`; enter them again in the panel (Model page) or with the gateway's own
   tools. A backup made while the gateway could not be asked has no list.
+- **Only the known settings files are restored** from `~/.config/nanoclaw` (the mount and sender
+  allowlists; the machine's identity files only with `--machine-identity`). The restore prints which it
+  replaced and which it left alone, and it never writes `scheduled-backup.key`. Review a replaced
+  `mount-allowlist.json` before starting: it decides which folders agent containers may see.
+- **Links.** A restored `data/`, `db/`, `env/` or `config/` tree may only hold links that stay inside it;
+  `groups/` and `store/` may hold any link (agents' own environments), and nothing in a restore follows
+  them. Run restores as the install's user, not as `root`.
+- **One at a time.** A restore, a rollback or a commit takes a lock; a second one started meanwhile is
+  refused (`restore_in_progress`). Transaction ids are checked (`YYYYMMDDTHHMMSSZ-xxxxxx`).
+- **If it is interrupted.** The journal is written before each step. A crash leaves a transaction in the
+  state `swapping`: `commit` refuses it and `rollback <transaction>` puts the previous state back from the
+  copies kept on disk, without deleting anything until the originals are back. If the automatic rollback
+  itself fails you get `rollback_failed` and the transaction stays: fix the cause (permissions, disk) and
+  run `rollback <transaction>` again.
 - Everything newer than the backup (messages, memory, tasks) is replaced. The rollback copy is the only
   way back.
 - Agent groups whose container image was customised are listed; rebuild them with
@@ -569,10 +594,12 @@ repeating the command can say what already happened.
 `restore <id> --rehearsal` restores a copy that **cannot act as the original**. Use it to test a backup on
 a second machine while the first is still running, without two installs answering the same chats. It:
 
-- keeps only a short allowlist of `.env` settings and drops anything that looks like a token or secret
-  (it prints the names it dropped);
+- keeps only a short allowlist of `.env` settings (the time zone, log level, container resource limits and
+  image names, the model settings) and drops anything that looks like a token, password, key, cookie or
+  credentialed URL (it prints the names it dropped);
 - does not restore channel stores, channel login files or the machine's identity;
-- marks pending tasks as paused and closes pending chat messages.
+- marks pending tasks as paused, closes every pending or in-flight chat message, and marks undelivered
+  replies as not deliverable, so a rehearsal host with a working channel has nothing to send.
 
 Conversation history, memory and the agents' files are kept. To go live afterwards, do a normal
 restore (or reinstall the channels' credentials yourself).
@@ -665,19 +692,42 @@ are yours to delete.
 ## Security model
 
 - One administrator. The password is hashed with scrypt (memory-hard) and never stored or logged.
-- Wrong passwords: five free, then a growing lock that survives restarts.
+- Wrong passwords: five free per address, then a growing lock for that address (it clears when the
+  service restarts, and lasts an hour at most); an overall ceiling of 50 failures an hour, kept across
+  restarts, stops floods. At most three password checks run at once (each costs about 128 MiB), the rest
+  are told to retry.
 - Sessions are server-side, in memory (a restart signs everyone out), with an unguessable 256-bit
-  token in an `HttpOnly`, `SameSite=Strict` cookie.
+  token in an `HttpOnly`, `SameSite=Strict` cookie. Over plain HTTP the cookie name carries the port
+  (`manager_panel_<port>`), because browsers share cookies between ports of the same host name; HTTPS
+  uses the stricter `__Host-` name. A duplicate cookie is refused rather than guessed at.
 - Every request must carry a local `Host`; cross-site requests are refused; every state change needs
   the CSRF token **and** an `Origin` equal to the panel's own.
 - Sensitive actions need the password again within the last five minutes.
-- Connections from public internet addresses are refused unless `PANEL_ALLOW_PUBLIC=true`.
+- Connections from public internet addresses are refused unless `PANEL_ALLOW_PUBLIC=true`. The panel
+  decides who may connect, and how often, from the address of the TCP connection it sees. **Behind a
+  reverse proxy that address is always the proxy's**, so the "private network only" check and the
+  per-address limits then apply to the proxy and not to your visitors; the same is true of a router that
+  forwards a port. Do not rely on them in that setup: restrict access at the proxy (allowed networks,
+  authentication) and keep the panel bound to the proxy's interface. The panel does not trust
+  `X-Forwarded-For`, on purpose.
 - Responses are built field by field: no credentials, no filesystem paths, no log lines, no internal
   ids (agents are shown under keyed hashes). Error responses carry a code and a request id only.
 - State changes are audited (time, action, status, request id; never bodies) in
   `data/manager-panel/audit.jsonl`.
 - Backups are encrypted with AES-256-GCM in authenticated chunks; a wrong key, a changed bit, a
-  truncated or reordered file is rejected. The key never touches the disk of the machine.
+  truncated, extended or reordered file is rejected. A manual backup's key never touches the disk of the
+  machine; the panel hands it only to the session that started the backup, once. Reading a backup is
+  bounded by the sizes its manifest declares, so a crafted file cannot fill the disk or memory, and it is
+  fully authenticated before anything in the install is touched.
+- The model endpoint is checked before it is saved: private and local addresses are allowed over plain
+  HTTP (including IPv6 literals such as `http://[fd00::1]:8000/v1`), anything public needs HTTPS, and
+  cloud metadata addresses (including `100.100.100.200` and `fd00:ec2::254`) and special ranges (link-local,
+  multicast, NAT64, 6to4, Teredo, the benchmarking range) are refused. The check connects to the address
+  it validated and does not follow redirects. The stored URL is resolved again when the agents use it,
+  outside the panel's control, so a name that later resolves somewhere else (DNS rebinding) is not
+  caught: use an IP address or a name you control. Do not set `NODE_USE_ENV_PROXY=1`, or other proxy
+  variables, for the panel's process: they bypass the address pinning of the check. Model names offered
+  from a remote server are filtered to the plain name pattern.
 - The panel runs with the NanoClaw user's privileges.
 
 ## Troubleshooting
@@ -689,7 +739,11 @@ are yours to delete.
 | Panel opens but says *host_not_allowed* (421) | The address uses a name that is not local. Add it to `PANEL_ALLOWED_HOSTS`. |
 | *network_not_allowed* (403) | The request came from a public internet address. Intended; see [Security model](#security-model). |
 | *origin_mismatch* | Behind a proxy or with a different name than expected: set `PANEL_PUBLIC_ORIGIN`. |
-| Cannot sign in, *login_throttled* | Too many wrong passwords. Wait, or run `scripts/manager-panel.ts unlock`. |
+| Cannot sign in, *login_throttled* | Too many wrong passwords from this address (or, rarely, from everywhere). Wait, restart the service to clear the per-address lock, or run `scripts/manager-panel.ts unlock` for the overall one. |
+| *login_busy* (429) | Three password checks are already running. Try again in a second. |
+| *setup_in_progress* (409) | The first-run setup was submitted twice at once; one of them went through. |
+| *Create backup* says a key is pending (*backup_key_pending*, 409) | A backup finished in another session and nobody has collected its key yet. Use that session, or wait 15 minutes. |
+| A restore says *restore_in_progress* or *rollback_failed* | Another restore, rollback or commit is running or crashed (remove a stale lock only if the process is gone); see *If it is interrupted* in [Restoring a backup](#restoring-a-backup). |
 | *Create backup* seems stuck on the first phase | It is waiting for agents that are in the middle of a message, up to `PANEL_BACKUP_WAIT_SECONDS`, then it carries on. The progress bar and the file count show when it is packing. |
 | Agents fail with *Missing key limit.output* | An old panel version wrote a context limit without an output limit; apply the model once more from the current panel. |
 | Agent answers nothing, container log says no `<message>` blocks | The model does not follow NanoClaw's reply format. Use a model that follows instructions. |
@@ -745,6 +799,11 @@ scripts/manager-panel.ts setup-code | reset-password | revoke-sessions | unlock 
 ```
 
 Run them as `pnpm exec tsx scripts/<name>.ts ...`.
+
+Options can be written `--keep 3` or `--keep=3`. An unknown option, or an option that needs a value and has
+none, stops the command with an error instead of being ignored (a typo such as `--rehersal` must never
+turn a rehearsal into a real restore). `prune` wants whole numbers: `--keep-last` 1 or more,
+`--keep-monthly` 0 or more. A `--key-file` that other users can read gets a warning; keep it at mode 0600.
 
 ### Files and folders
 
