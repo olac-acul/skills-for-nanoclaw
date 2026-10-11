@@ -52,5 +52,4 @@ from upstream's OneCLI skill; the panel configures them, it does not replace the
 
 ## Ideas, not started
 
-- A phone-friendly layout that can be saved to a home screen.
 - Hooking the scheduled backups' result into a notification.

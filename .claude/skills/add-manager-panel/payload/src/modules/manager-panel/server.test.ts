@@ -275,6 +275,23 @@ describe('request protections', () => {
     expect(script).toContain('location.hostname');
   });
 
+  it('serves the home-screen manifest and icons with the same protections, and refuses other icon sizes', async () => {
+    const manifest = await fetch(base + '/manifest.webmanifest');
+    expect(manifest.status).toBe(200);
+    expect(manifest.headers.get('content-type')).toContain('manifest+json');
+    expect(manifest.headers.get('content-security-policy')).toContain("manifest-src 'self'");
+    const parsed = (await manifest.json()) as { display: string; start_url: string; icons: Array<{ src: string }> };
+    expect(parsed).toMatchObject({ display: 'standalone', start_url: '/' });
+    for (const icon of parsed.icons) {
+      const res = await fetch(base + icon.src);
+      expect(res.headers.get('content-type')).toBe('image/png');
+      expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(100);
+    }
+    expect((await fetch(base + '/apple-touch-icon.png')).status).toBe(200);
+    expect((await fetch(base + '/icon-64.png')).status).toBe(404);
+    expect(await rawGet('/manifest.webmanifest', 'attacker.example.com')).toBe(421);
+  });
+
   it('serves the guide, with its anchors and the same protections as the other pages', async () => {
     const page = await fetch(base + '/guide');
     const html = await page.text();

@@ -2,7 +2,7 @@ import vm from 'node:vm';
 
 import { describe, expect, it } from 'vitest';
 
-import { APP_JS, APP_CSS, INDEX_HTML } from './ui.js';
+import { APP_JS, APP_CSS, INDEX_HTML, UI_CSP } from './ui.js';
 
 /**
  * The browser script is one big template string. A character that means something inside a template (a
@@ -31,5 +31,19 @@ describe('the served browser script', () => {
   it('keeps the stylesheet free of remote references', () => {
     expect(APP_CSS).not.toMatch(/url\(\s*['"]?https?:/i);
     expect(APP_CSS).not.toMatch(/@import/i);
+  });
+
+  it('lays tables out as cards on a phone and labels each cell', () => {
+    expect(APP_CSS).toMatch(/@media \(max-width: 640px\)/);
+    expect(APP_CSS).toContain('attr(data-label)');
+    expect(APP_JS.match(/class: 'stack'/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(APP_JS).toContain("'data-label': label");
+  });
+
+  it('lets a phone save the page to its home screen', () => {
+    expect(INDEX_HTML).toContain('rel="manifest" href="/manifest.webmanifest"');
+    expect(INDEX_HTML).toContain('rel="apple-touch-icon"');
+    expect(INDEX_HTML).toContain('viewport-fit=cover');
+    expect(UI_CSP).toContain("manifest-src 'self'");
   });
 });

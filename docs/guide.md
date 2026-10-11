@@ -198,6 +198,23 @@ kept across restarts) still stops a flood from many addresses; a valid session c
 password, even then. Sensitive actions (applying a model, creating, downloading or deleting a
 backup) ask for the password again if you have not typed it in the last five minutes.
 
+### Using it on a phone
+
+The panel adapts to a small screen: the four pages are a tab bar at the bottom, within reach of a thumb;
+tables become one card per agent or backup; fields and buttons are large enough to tap; dialogs open from
+the bottom edge. It follows the phone's light or dark setting.
+
+To put it on the home screen, open the panel in the phone's browser, then:
+
+- **iPhone or iPad (Safari):** Share, then **Add to Home Screen**.
+- **Android (Chrome):** the menu, then **Add to Home screen** (or **Install app**).
+
+It then opens without the browser's address bar, with its own icon. Over plain HTTP on a local network the
+phone treats this as a shortcut, and some phones still show the address bar; over HTTPS
+([HTTPS and network access](#https-and-network-access)) Android offers a real install. The icon is drawn by
+the panel itself, nothing is downloaded from outside. A home-screen copy keeps its own sign-in, separate from
+the browser's, so you sign in once in it.
+
 ### Overview
 
 Release, how many agents exist and how many are working, sessions, uptime, the credential gateway,

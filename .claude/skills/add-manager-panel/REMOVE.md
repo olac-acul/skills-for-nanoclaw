@@ -24,6 +24,8 @@ scripts/manager-credentials.ts
 scripts/manager-panel.ts
 scripts/tsconfig.manager-credentials.json
 scripts/tsconfig.manager-panel.json
+src/modules/manager-panel/app-icon.test.ts
+src/modules/manager-panel/app-icon.ts
 src/modules/manager-panel/auth.ts
 src/modules/manager-panel/backend.ts
 src/modules/manager-panel/backup-job.test.ts

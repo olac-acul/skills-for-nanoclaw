@@ -39,6 +39,8 @@ payload/scripts/manager-credentials.ts -> scripts/manager-credentials.ts
 payload/scripts/manager-panel.ts -> scripts/manager-panel.ts
 payload/scripts/tsconfig.manager-credentials.json -> scripts/tsconfig.manager-credentials.json
 payload/scripts/tsconfig.manager-panel.json -> scripts/tsconfig.manager-panel.json
+payload/src/modules/manager-panel/app-icon.test.ts -> src/modules/manager-panel/app-icon.test.ts
+payload/src/modules/manager-panel/app-icon.ts -> src/modules/manager-panel/app-icon.ts
 payload/src/modules/manager-panel/auth.ts -> src/modules/manager-panel/auth.ts
 payload/src/modules/manager-panel/backend.ts -> src/modules/manager-panel/backend.ts
 payload/src/modules/manager-panel/backup-job.test.ts -> src/modules/manager-panel/backup-job.test.ts

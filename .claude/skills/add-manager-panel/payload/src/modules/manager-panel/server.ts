@@ -37,10 +37,12 @@ import {
 import type { ScryptParams } from './password.js';
 import { clientKey, type Session } from './sessions.js';
 import type { PanelState } from './state.js';
+import { icon, MANIFEST } from './app-icon.js';
 import { GUIDE_HTML } from './guide-html.js';
 import { APP_CSS, APP_JS, INDEX_HTML, UI_CSP } from './ui.js';
 
 export const MAX_BODY_BYTES = 64 * 1024;
+const ICON_PATH = /^\/(?:icon-(192|512)|apple-touch-icon)\.png$/;
 const BODY_TIMEOUT_MS = 30_000;
 const COOKIE_SECURE = '__Host-manager_panel';
 const COOKIE_PLAIN = 'manager_panel';
@@ -254,7 +256,7 @@ export function createPanelServer(config: PanelServerConfig): http.Server {
     response.end(status === 204 || body === undefined ? undefined : JSON.stringify(body));
   }
 
-  function sendStatic(response: http.ServerResponse, type: string, body: string): void {
+  function sendStatic(response: http.ServerResponse, type: string, body: string | Buffer): void {
     response.writeHead(200, {
       'content-type': type,
       'cache-control': 'no-store',
@@ -286,6 +288,14 @@ export function createPanelServer(config: PanelServerConfig): http.Server {
             sendStatic(response, 'text/html; charset=utf-8', GUIDE_HTML);
           else if (url.pathname === '/app.js') sendStatic(response, 'text/javascript; charset=utf-8', APP_JS);
           else if (url.pathname === '/app.css') sendStatic(response, 'text/css; charset=utf-8', APP_CSS);
+          else if (url.pathname === '/manifest.webmanifest')
+            sendStatic(response, 'application/manifest+json; charset=utf-8', MANIFEST);
+          else if (ICON_PATH.test(url.pathname))
+            sendStatic(
+              response,
+              'image/png',
+              icon(url.pathname === '/apple-touch-icon.png' ? 180 : Number(ICON_PATH.exec(url.pathname)![1]))!,
+            );
           else throw new HttpError(404, 'not_found');
           return;
         }
