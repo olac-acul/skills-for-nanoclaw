@@ -37,6 +37,7 @@ import type { DbDriver } from '../src/db/driver.js';
 import { getInstallSlug } from '../src/install-slug.js';
 // Registers module migrations so the restore can tell what this code knows about.
 import '../src/modules/index.js';
+import { UsageError, looseKeyMode, parseArgs, printable, wholeNumber } from '../src/modules/manager-backup/cli-args.js';
 import { parseKey } from '../src/modules/manager-backup/crypto.js';
 import {
   hostIsRunning,
@@ -47,6 +48,7 @@ import {
 } from '../src/modules/manager-backup/restore.js';
 import {
   ScheduleError,
+  assertUnitName,
   initScheduledKey,
   readScheduledKey,
   renderUnits,
@@ -55,30 +57,6 @@ import {
 } from '../src/modules/manager-backup/schedule.js';
 import { BackupService } from '../src/modules/manager-backup/service.js';
 import { countBusySessions, createUpstreamHost } from '../src/modules/manager-backup/upstream-host.js';
-
-function parseArgs(argv: string[]): { positional: string[]; flags: Map<string, string | true> } {
-  const positional: string[] = [];
-  const flags = new Map<string, string | true>();
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (!arg.startsWith('--')) {
-      positional.push(arg);
-      continue;
-    }
-    const name = arg.slice(2);
-    const next = argv[i + 1];
-    if (
-      ['key-file', 'keep-last', 'keep-monthly', 'dir', 'keep', 'weekday', 'time'].includes(name) &&
-      next !== undefined
-    ) {
-      flags.set(name, next);
-      i++;
-    } else {
-      flags.set(name, true);
-    }
-  }
-  return { positional, flags };
-}
 
 function fail(message: string): never {
   console.error(`manager-backup: ${message}`);
@@ -103,6 +81,8 @@ async function readSecret(question: string): Promise<string> {
 
 async function obtainKey(flags: Map<string, string | true>): Promise<Buffer> {
   const file = flags.get('key-file');
+  if (typeof file === 'string' && looseKeyMode(fs.statSync(file).mode))
+    console.error(`Warning: ${file} can be read by other users; restrict it with: chmod 600 <file>`);
   const text =
     typeof file === 'string'
       ? fs.readFileSync(file, 'utf8')
@@ -164,7 +144,10 @@ function systemctl(args: string[]): string {
 }
 
 function unitNames(): { name: string; dir: string } {
-  return { name: `nanoclaw-backup-${getInstallSlug()}`, dir: path.join(os.homedir(), '.config', 'systemd', 'user') };
+  return {
+    name: assertUnitName(`nanoclaw-backup-${getInstallSlug()}`),
+    dir: path.join(os.homedir(), '.config', 'systemd', 'user'),
+  };
 }
 
 async function scheduleCommand(sub: string | undefined, flags: Map<string, string | true>): Promise<void> {
@@ -226,6 +209,7 @@ async function scheduleCommand(sub: string | undefined, flags: Map<string, strin
       timer = systemctl(['show', `${name}.timer`, '-p', 'LoadState', '-p', 'ActiveState', '--value'])
         .trim()
         .split('\n')
+        .map(printable)
         .join(', ');
     } catch {
       /* no user manager or no unit */
@@ -235,7 +219,9 @@ async function scheduleCommand(sub: string | undefined, flags: Map<string, strin
     const scheduled = service.list().filter((record) => record.trigger === 'scheduled');
     console.log(`Scheduled backups kept: ${scheduled.length}`);
     for (const record of scheduled)
-      console.log(`  ${record.id}  ${record.createdAt}  ${human(record.bytes).padStart(9)}  ${record.consistency}`);
+      console.log(
+        `  ${printable(record.id)}  ${printable(record.createdAt)}  ${human(record.bytes).padStart(9)}  ${printable(record.consistency)}`,
+      );
     return;
   }
   if (sub === 'remove') {
@@ -267,7 +253,14 @@ function nextRun(name: string): string {
 }
 
 async function main(): Promise<void> {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
+  let parsed: ReturnType<typeof parseArgs>;
+  try {
+    parsed = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    if (error instanceof UsageError) fail(error.message);
+    throw error;
+  }
+  const { positional, flags } = parsed;
   const [command, target] = positional;
 
   if (command === 'restore' || command === 'commit' || command === 'rollback') {
@@ -287,18 +280,18 @@ async function main(): Promise<void> {
     const plan = await planRestore(host, bundle, key);
     const mode = flags.has('rehearsal') ? 'rehearsal' : 'full';
     console.log(
-      `Backup ${plan.manifest.id} from ${plan.manifest.createdAt} (release ${plan.manifest.source.version}, ${plan.manifest.consistency})`,
+      `Backup ${printable(plan.manifest.id)} from ${printable(plan.manifest.createdAt)} (release ${printable(plan.manifest.source.version)}, ${printable(plan.manifest.consistency)})`,
     );
     console.log(
       `Mode: ${mode}${mode === 'rehearsal' ? ' (channel credentials, stores and identity are NOT restored; pending work is paused)' : ''}`,
     );
     console.log(
-      `Migrations to run on first start: ${plan.migrationsToRun.length ? plan.migrationsToRun.join(', ') : 'none'}`,
+      `Migrations to run on first start: ${plan.migrationsToRun.length ? plan.migrationsToRun.map(printable).join(', ') : 'none'}`,
     );
-    for (const warning of plan.warnings) console.log(`Warning: ${warning}`);
+    for (const warning of plan.warnings) console.log(`Warning: ${printable(warning)}`);
     if (plan.credentialsToReenter.length)
       console.log(
-        `Credentials to enter again in the gateway after the restore (they are not part of a backup): ${plan.credentialsToReenter.join(', ')}`,
+        `Credentials to enter again in the gateway after the restore (they are not part of a backup): ${plan.credentialsToReenter.map(printable).join(', ')}`,
       );
     console.log(
       'Everything newer than this backup (messages, memory, tasks) will be replaced. A rollback copy is kept until you commit.',
@@ -320,21 +313,25 @@ async function main(): Promise<void> {
       mode,
       restoreMachineIdentity: flags.has('machine-identity'),
     });
-    console.log(`Restored. Transaction: ${result.txn}`);
+    console.log(`Restored. Transaction: ${printable(result.txn)}`);
     if (result.rebuildGroups.length)
       console.log(
-        `Rebuild derived images for: ${result.rebuildGroups.join(', ')} (ncl groups restart --id <group> --rebuild)`,
+        `Rebuild derived images for: ${result.rebuildGroups.map(printable).join(', ')} (ncl groups restart --id <group> --rebuild)`,
       );
     if (result.keptEnvKeys.length)
-      console.log(`Kept this machine's own settings in .env instead of the backup's: ${result.keptEnvKeys.join(', ')}`);
+      console.log(
+        `Kept this machine's own settings in .env instead of the backup's: ${result.keptEnvKeys.map(printable).join(', ')}`,
+      );
     if (result.adoptedEnvKeys.length)
-      console.log(`This machine had none, so the backup's value was used for: ${result.adoptedEnvKeys.join(', ')}`);
+      console.log(
+        `This machine had none, so the backup's value was used for: ${result.adoptedEnvKeys.map(printable).join(', ')}`,
+      );
     if (result.droppedEnvKeys.length)
-      console.log(`Rehearsal dropped these .env keys: ${result.droppedEnvKeys.join(', ')}`);
+      console.log(`Rehearsal dropped these .env keys: ${result.droppedEnvKeys.map(printable).join(', ')}`);
     if (!result.upgradeMarkerPreserved)
       console.log('This install had no upgrade marker; run: pnpm exec tsx scripts/upgrade-state.ts set');
     console.log(
-      `Start the service and check it. Then run "commit ${result.txn}" to discard the rollback copy, or "rollback ${result.txn}" to undo.`,
+      `Start the service and check it. Then run "commit ${printable(result.txn)}" to discard the rollback copy, or "rollback ${printable(result.txn)}" to undo.`,
     );
     return;
   }
@@ -360,7 +357,7 @@ async function main(): Promise<void> {
         force: true,
       });
       console.log(
-        `Backup ${record.id} (${human(record.bytes)}, ${record.consistency}) written to ${service.fileFor(record.id)}`,
+        `Backup ${printable(record.id)} (${human(record.bytes)}, ${printable(record.consistency)}) written to ${printable(service.fileFor(record.id))}`,
       );
       console.log('');
       console.log('KEY (shown once; store it in a password manager, it cannot be recovered):');
@@ -368,7 +365,7 @@ async function main(): Promise<void> {
     } else if (command === 'list') {
       for (const record of service.list()) {
         console.log(
-          `${record.id}  ${record.createdAt}  ${human(record.bytes).padStart(9)}  release ${record.release}  ${record.consistency}`,
+          `${printable(record.id)}  ${printable(record.createdAt)}  ${human(record.bytes).padStart(9)}  release ${printable(record.release)}  ${printable(record.consistency)}`,
         );
       }
     } else if (command === 'verify') {
@@ -378,7 +375,7 @@ async function main(): Promise<void> {
         return verifyBundle(resolveBundle(service, target), await obtainKey(flags));
       })();
       console.log(
-        `OK: ${result.entries} entries, ${result.files} files, ${human(result.bytes)} of content, release ${result.manifest.source.version}`,
+        `OK: ${result.entries} entries, ${result.files} files, ${human(result.bytes)} of content, release ${printable(result.manifest.source.version)}`,
       );
     } else if (command === 'scheduled') {
       const { keep } = validateSchedule({ keep: flags.get('keep') });
@@ -394,19 +391,21 @@ async function main(): Promise<void> {
         trigger: 'scheduled',
       });
       console.log(
-        `Scheduled backup ${record.id} (${human(record.bytes)}, ${record.consistency}) written to ${service.fileFor(record.id)}`,
+        `Scheduled backup ${printable(record.id)} (${human(record.bytes)}, ${printable(record.consistency)}) written to ${printable(service.fileFor(record.id))}`,
       );
       const removed = service.pruneScheduled(keep);
       console.log(
         removed.length
-          ? `Removed ${removed.length} older scheduled backup(s): ${removed.join(', ')}`
+          ? `Removed ${removed.length} older scheduled backup(s): ${removed.map(printable).join(', ')}`
           : `No older scheduled backups to remove (keeping the last ${keep})`,
       );
     } else if (command === 'prune') {
-      const keepLast = Number(flags.get('keep-last') ?? 7);
-      const keepMonthly = Number(flags.get('keep-monthly') ?? 6);
+      const keepLast = wholeNumber('keep-last', flags.get('keep-last'), 1, 7);
+      const keepMonthly = wholeNumber('keep-monthly', flags.get('keep-monthly'), 0, 6);
       const removed = service.prune({ keepLast, keepMonthly });
-      console.log(removed.length ? `Removed ${removed.length}: ${removed.join(', ')}` : 'Nothing to remove');
+      console.log(
+        removed.length ? `Removed ${removed.length}: ${removed.map(printable).join(', ')}` : 'Nothing to remove',
+      );
     } else {
       fail(
         'usage: create | list | verify <id|file> | restore <id|file> | commit <txn> | rollback <txn> | prune | schedule <init-key|install|status|remove> | scheduled',

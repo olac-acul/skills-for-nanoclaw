@@ -25,6 +25,8 @@ scripts/manager-backup.ts
 scripts/tsconfig.manager-backup.json
 src/modules/manager-backup/bundle.test.ts
 src/modules/manager-backup/bundle.ts
+src/modules/manager-backup/cli-args.test.ts
+src/modules/manager-backup/cli-args.ts
 src/modules/manager-backup/crypto.test.ts
 src/modules/manager-backup/crypto.ts
 src/modules/manager-backup/fixtures/synthetic-install.ts
