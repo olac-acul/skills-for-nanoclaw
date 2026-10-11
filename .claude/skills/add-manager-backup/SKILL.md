@@ -51,6 +51,8 @@ payload/scripts/manager-backup.ts -> scripts/manager-backup.ts
 payload/scripts/tsconfig.manager-backup.json -> scripts/tsconfig.manager-backup.json
 payload/src/modules/manager-backup/bundle.test.ts -> src/modules/manager-backup/bundle.test.ts
 payload/src/modules/manager-backup/bundle.ts -> src/modules/manager-backup/bundle.ts
+payload/src/modules/manager-backup/cli-args.test.ts -> src/modules/manager-backup/cli-args.test.ts
+payload/src/modules/manager-backup/cli-args.ts -> src/modules/manager-backup/cli-args.ts
 payload/src/modules/manager-backup/crypto.test.ts -> src/modules/manager-backup/crypto.test.ts
 payload/src/modules/manager-backup/crypto.ts -> src/modules/manager-backup/crypto.ts
 payload/src/modules/manager-backup/fixtures/synthetic-install.ts -> src/modules/manager-backup/fixtures/synthetic-install.ts

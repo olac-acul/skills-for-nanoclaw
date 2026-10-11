@@ -107,6 +107,19 @@ describe('verify / delete / prune', () => {
   });
 });
 
+describe('prune validation', () => {
+  it('refuses a policy that would keep nothing or is not a whole number', () => {
+    const svc = service();
+    for (const keepLast of [0, -1, 1.5, Number.NaN]) {
+      expect(() => svc.prune({ keepLast, keepMonthly: 1 })).toThrow(BackupError);
+    }
+    for (const keepMonthly of [-1, 0.5, Number.NaN]) {
+      expect(() => svc.prune({ keepLast: 1, keepMonthly })).toThrow(BackupError);
+    }
+    expect(svc.prune({ keepLast: 1, keepMonthly: 0 })).toEqual([]);
+  });
+});
+
 describe('scheduled backups', () => {
   it('uses the key it is given, records who started it, and a manual backup is recorded as manual', async () => {
     const svc = service();

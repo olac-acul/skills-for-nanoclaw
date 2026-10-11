@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseKey } from './crypto.js';
 import {
   DEFAULT_SCHEDULE,
+  assertUnitName,
   ScheduleError,
   initScheduledKey,
   readScheduledKey,
@@ -113,6 +114,18 @@ describe('renderUnits', () => {
   it('quotes paths so a space or a percent sign cannot change the command', () => {
     const { service } = renderUnits({ ...input, projectRoot: '/home/user/my install%h' });
     expect(service).toContain('WorkingDirectory=/home/user/my install%%h\n');
+  });
+
+  it('escapes $ so systemd does not expand a variable in a path', () => {
+    const { service } = renderUnits({ ...input, nodeBin: '/opt/$HOME/node', projectRoot: '/home/user/$PWD' });
+    expect(service).toContain('ExecStart="/opt/$$HOME/node"');
+    expect(service).not.toMatch(/[^$]\$HOME/);
+  });
+
+  it('refuses an unsafe unit name', () => {
+    for (const name of ['', 'Upper', 'a b', 'a/../b', 'x\nExecStart=/bin/evil', '-lead', 'a'.repeat(65), 'a_b'])
+      expect(() => renderUnits({ ...input, name })).toThrowError(ScheduleError);
+    expect(assertUnitName('nanoclaw-backup-ab12cd34')).toBe('nanoclaw-backup-ab12cd34');
   });
 
   it('refuses a path with a line break', () => {

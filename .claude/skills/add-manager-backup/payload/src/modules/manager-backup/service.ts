@@ -210,6 +210,10 @@ export class BackupService {
 
   /** Keep the newest `keepLast`, plus the newest of each of the `keepMonthly` most recent older months. */
   prune(policy: RetentionPolicy): string[] {
+    if (!Number.isInteger(policy.keepLast) || policy.keepLast < 1)
+      throw new BackupError('invalid_id', 'keepLast must be a whole number of 1 or more');
+    if (!Number.isInteger(policy.keepMonthly) || policy.keepMonthly < 0)
+      throw new BackupError('invalid_id', 'keepMonthly must be a whole number of 0 or more');
     const records = this.list();
     const keep = new Set(records.slice(0, policy.keepLast).map((record) => record.id));
     const months = new Set<string>();

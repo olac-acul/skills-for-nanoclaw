@@ -114,14 +114,25 @@ function bare(value: string): string {
   return value.replace(/%/g, '%%');
 }
 
+/** The unit name ends up in file names and in `Unit=`: only a plain lowercase slug is accepted. */
+export function assertUnitName(name: string): string {
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name))
+    throw new ScheduleError(
+      'invalid_setting',
+      `unsafe unit name ${JSON.stringify(name)}; expected [a-z0-9-], up to 64`,
+    );
+  return name;
+}
+
 function quote(value: string): string {
   if (/[\n\r\0]/.test(value)) throw new ScheduleError('invalid_setting', 'a path contains a control character');
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')}"`;
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%').replace(/\$/g, '$$$$')}"`;
 }
 
 /** The oneshot service and the weekly timer. A run that was missed (machine off) happens at the next start. */
 export function renderUnits(input: UnitInput): { service: string; timer: string } {
   const { settings } = input;
+  assertUnitName(input.name);
   const service = `[Unit]
 Description=NanoClaw scheduled backup (keeps the last ${settings.keep})
 After=network-online.target
