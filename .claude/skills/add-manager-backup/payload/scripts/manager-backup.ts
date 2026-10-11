@@ -67,7 +67,10 @@ function parseArgs(argv: string[]): { positional: string[]; flags: Map<string, s
     }
     const name = arg.slice(2);
     const next = argv[i + 1];
-    if (['key-file', 'keep-last', 'keep-monthly', 'dir'].includes(name) && next !== undefined) {
+    if (
+      ['key-file', 'keep-last', 'keep-monthly', 'dir', 'keep', 'weekday', 'time'].includes(name) &&
+      next !== undefined
+    ) {
       flags.set(name, next);
       i++;
     } else {

@@ -84,7 +84,9 @@ export const DEFAULT_SCHEDULE: ScheduleSettings = { keep: 3, weekday: 'Sun', tim
 
 /** Check settings that end up in a systemd unit; anything else is refused. */
 export function validateSchedule(input: { keep?: unknown; weekday?: unknown; time?: unknown }): ScheduleSettings {
-  const keep = input.keep === undefined ? DEFAULT_SCHEDULE.keep : Number(input.keep);
+  // A bare `--keep` (no value) arrives as `true`, which Number() would turn into 1: refuse it.
+  const keep =
+    input.keep === undefined ? DEFAULT_SCHEDULE.keep : typeof input.keep === 'boolean' ? NaN : Number(input.keep);
   if (!Number.isInteger(keep) || keep < 1 || keep > 52)
     throw new ScheduleError('invalid_setting', 'keep must be a whole number from 1 to 52');
   const weekday = (input.weekday === undefined ? DEFAULT_SCHEDULE.weekday : input.weekday) as Weekday;

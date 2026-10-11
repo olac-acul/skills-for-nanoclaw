@@ -74,6 +74,8 @@ describe('validateSchedule', () => {
     [{ keep: 53 }],
     [{ keep: 1.5 }],
     [{ keep: 'many' }],
+    [{ keep: true }],
+    [{ keep: '' }],
     [{ weekday: 'Sunday' }],
     [{ weekday: 'Sun *-*-* 00:00:00\nExecStart=evil' }],
     [{ time: '24:00' }],
