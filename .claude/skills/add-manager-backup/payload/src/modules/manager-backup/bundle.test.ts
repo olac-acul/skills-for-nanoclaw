@@ -17,7 +17,8 @@ import {
 } from './bundle.js';
 import { CryptoError, generateKey } from './crypto.js';
 import type { BackupHost } from './host.js';
-import { extractTar } from './tar.js';
+import { encodeEntryHeader, extractTar } from './tar.js';
+import { fileEntry, linkEntry, rewriteBundle, sealTar } from './fixtures/synthetic-install.js';
 import { openBundleStream } from './bundle.js';
 
 let tmp: string;
@@ -267,5 +268,175 @@ describe('verifyBundle', () => {
     const bytes = fs.readFileSync(destFile);
     fs.writeFileSync(destFile, bytes.subarray(0, bytes.length - 40));
     await expect(verifyBundle(destFile, key)).rejects.toBeInstanceOf(CryptoError);
+  });
+});
+
+describe('symlink policy of bundles', () => {
+  it('refuses chained links and links in members that have no use for them', () => {
+    const allow = BUNDLE_POLICY.allowSymlink!;
+    expect(allow('data/a', '.')).toBe(true);
+    expect(allow('data/b', 'a/..')).toBe(false);
+    expect(allow('data/d/e', '../x')).toBe(true);
+    expect(allow('data/d/e', 'x/../../..')).toBe(false);
+    expect(allow('db/l', 'x')).toBe(false);
+    expect(allow('env/l', 'x')).toBe(false);
+    expect(allow('config/l', 'x')).toBe(false);
+    expect(allow('groups/g/venv/../x', 'a/../../../etc')).toBe(true); // groups and store keep any link
+  });
+});
+
+describe('a tree with entries a restore would refuse', () => {
+  it('still yields a bundle that verifies and restores, and says what was left out', async () => {
+    fs.writeFileSync(path.join(project, 'groups', 'g1', 'odd\\name.txt'), 'kept');
+    fs.symlinkSync('/etc', path.join(project, 'data', 'v2-sessions', 'g1', 'absolute-link'));
+    fs.symlinkSync('../../../..', path.join(project, 'data', 'v2-sessions', 'g1', 'escaping-link'));
+    fs.symlinkSync('a/..', path.join(project, 'data', 'v2-sessions', 'g1', 'inner-parent'));
+    const { destFile, key, manifest } = await makeBundle();
+    const verified = await verifyBundle(destFile, key);
+    expect(verified.bytes).toBe(manifest.contents.bytes);
+    const note = manifest.excluded.find((line) => line.includes('a restore would refuse'));
+    expect(note).toContain('3 entries');
+    expect(note).toContain('data/v2-sessions/g1/absolute-link');
+    const out = await extractAll(destFile, key);
+    expect(fs.readFileSync(path.join(out, 'groups', 'g1', 'odd\\name.txt'), 'utf8')).toBe('kept');
+    expect(fs.existsSync(path.join(out, 'data', 'v2-sessions', 'g1', 'absolute-link'))).toBe(false);
+    expect(fs.readlinkSync(path.join(out, 'data', 'v2-sessions', 'g1', '.claude-shared', 'skills', 'welcome'))).toBe(
+      '/app/skills/welcome',
+    );
+  });
+
+  it('reports nothing when nothing was left out', async () => {
+    const { manifest } = await makeBundle();
+    expect(manifest.excluded.some((line) => line.includes('a restore would refuse'))).toBe(false);
+  });
+});
+
+describe('verifyBundle limits', () => {
+  it('refuses a manifest that declares fewer entries, files or bytes than the bundle holds', async () => {
+    const { destFile, key } = await makeBundle();
+    const crafted = path.join(tmp, 'crafted.mbk');
+    await rewriteBundle(destFile, key, crafted, (items) => items, {
+      recount: false,
+      manifest: (m) => {
+        m.contents = { entries: 5, files: 3, bytes: 10 };
+      },
+    });
+    await expect(verifyBundle(crafted, key)).rejects.toThrow(/more entries|more files/);
+    await rewriteBundle(destFile, key, crafted, (items) => items, {
+      manifest: (m) => {
+        m.contents.bytes = 0;
+      },
+      recount: false,
+    });
+    await expect(verifyBundle(crafted, key)).rejects.toBeTruthy();
+  });
+
+  it('compares the byte count with the manifest, not only entries and files', async () => {
+    const { destFile, key, manifest } = await makeBundle();
+    const crafted = path.join(tmp, 'crafted.mbk');
+    await rewriteBundle(destFile, key, crafted, (items) => items, {
+      recount: false,
+      manifest: (m) => {
+        m.contents = { ...manifest.contents, bytes: manifest.contents.bytes - 1 };
+      },
+    });
+    await expect(verifyBundle(crafted, key)).rejects.toBeTruthy();
+    await rewriteBundle(destFile, key, crafted, (items) => items, {
+      recount: false,
+      manifest: (m) => {
+        m.contents = { ...manifest.contents, bytes: manifest.contents.bytes + 1 };
+      },
+    });
+    await expect(verifyBundle(crafted, key)).rejects.toMatchObject({ code: 'count_mismatch' });
+  });
+
+  it('refuses a negative or fractional size in the manifest', async () => {
+    const { destFile, key } = await makeBundle();
+    const crafted = path.join(tmp, 'crafted.mbk');
+    await rewriteBundle(destFile, key, crafted, (items) => items, {
+      recount: false,
+      manifest: (m) => {
+        m.contents = { entries: 1, files: 1, bytes: -5 };
+      },
+    });
+    await expect(verifyBundle(crafted, key)).rejects.toMatchObject({ code: 'bad_manifest' });
+  });
+
+  it('stops at a header that declares a huge file, without writing anything for it', async () => {
+    const { destFile, key } = await makeBundle();
+    const hostile = path.join(tmp, 'hostile.mbk');
+    // A header claiming ten terabytes right after the real members: the bundle is cut there.
+    const real: Buffer[] = [];
+    for await (const part of openBundleStream(destFile, key)) real.push(part);
+    const tar = Buffer.concat(real);
+    const endMarker = tar.length - 1024;
+    const header = encodeEntryHeader({
+      path: 'data/bomb',
+      type: 'file',
+      mode: 0o600,
+      uid: 0,
+      gid: 0,
+      mtime: 0,
+      size: 10 ** 13,
+    });
+    await sealTar(Buffer.concat([tar.subarray(0, endMarker), header]), key, hostile);
+    await expect(verifyBundle(hostile, key)).rejects.toThrow(/more entries|more files|more bytes/);
+  });
+
+  it('refuses over-long member names', async () => {
+    const { destFile, key } = await makeBundle();
+    const crafted = path.join(tmp, 'crafted.mbk');
+    await rewriteBundle(destFile, key, crafted, (items) => [...items, fileEntry(`groups/${'n'.repeat(300)}`, 'x')]);
+    await expect(verifyBundle(crafted, key)).rejects.toThrow(/too long/);
+  });
+});
+
+describe('hand-made members', () => {
+  it('refuses database sidecar files, which SQLite would apply on first open', async () => {
+    const { destFile, key } = await makeBundle();
+    const crafted = path.join(tmp, 'crafted.mbk');
+    for (const name of [
+      'data/v2-sessions/g1/s1/inbound.db-wal',
+      'data/v2-sessions/g1/s1/outbound.db-journal',
+      'data/v2.db-wal',
+      'db/v2.db-wal',
+      'db/other',
+    ]) {
+      await rewriteBundle(destFile, key, crafted, (items) => [...items, fileEntry(name, 'x')]);
+      await expect(verifyBundle(crafted, key)).rejects.toMatchObject({ code: 'unsafe_member' });
+    }
+  });
+
+  it('still allows the sidecar of a store database, which the packer does archive', async () => {
+    fs.writeFileSync(path.join(project, 'store', 'cache.db-wal'), 'x');
+    const { destFile, key } = await makeBundle();
+    await expect(verifyBundle(destFile, key)).resolves.toBeDefined();
+  });
+
+  it('refuses links in members that cannot hold any', async () => {
+    const { destFile, key } = await makeBundle();
+    const crafted = path.join(tmp, 'crafted.mbk');
+    await rewriteBundle(destFile, key, crafted, (items) => [...items, linkEntry('config/nanoclaw/l', 'x')]);
+    await expect(verifyBundle(crafted, key)).rejects.toMatchObject({ code: 'unsafe_symlink' });
+  });
+});
+
+describe('authentication of the whole file', () => {
+  it('notices a damaged last chunk even when the archive and the gzip stream ended before it', async () => {
+    const { destFile, key } = await makeBundle();
+    const tar: Buffer[] = [];
+    for await (const part of openBundleStream(destFile, key)) tar.push(part);
+    const sealed = path.join(tmp, 'padded.mbk');
+    // Small chunks and a long tail of padding after the gzip stream: the last chunk holds nothing the reader needs.
+    await sealTar(Buffer.concat(tar), key, sealed, { chunkLog2: 10, trailing: 256 * 1024 });
+    await expect(verifyBundle(sealed, key)).resolves.toBeDefined();
+    const bytes = fs.readFileSync(sealed);
+    bytes[bytes.length - 20] ^= 0xff;
+    fs.writeFileSync(sealed, bytes);
+    await expect(verifyBundle(sealed, key)).rejects.toBeInstanceOf(CryptoError);
+    const whole = fs.readFileSync(sealed);
+    // Dropping the final chunk altogether is noticed too.
+    fs.writeFileSync(sealed, whole.subarray(0, whole.length - (1024 + 16)));
+    await expect(verifyBundle(sealed, key)).rejects.toBeInstanceOf(CryptoError);
   });
 });

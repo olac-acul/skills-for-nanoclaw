@@ -4,11 +4,16 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import zlib from 'node:zlib';
 
 import Database from 'better-sqlite3';
 
-import { snapshotSqliteFile } from '../bundle.js';
+import { openBundleStream, snapshotSqliteFile, type BundleManifest } from '../bundle.js';
+import { encryptStream } from '../crypto.js';
 import type { BackupHost } from '../host.js';
+import { packEntries, readTar, type PackItem } from '../tar.js';
 
 export interface SyntheticOptions {
   /** Distinguishes two installs in the same test. */
@@ -154,4 +159,85 @@ export function createSyntheticInstall(root: string, input: SyntheticOptions): S
   fs.writeFileSync(path.join(home, 'device-key.json'), `${options.label}-device-key`);
 
   return { project, home, host: makeHost(project, home, options.migrations), options };
+}
+
+/** Encrypt raw tar bytes the way a bundle is written, optionally padding the gzip stream with trailing zeros. */
+export async function sealTar(
+  tar: Buffer,
+  key: Buffer,
+  destFile: string,
+  options: { chunkLog2?: number; trailing?: number } = {},
+): Promise<void> {
+  const gz = zlib.gzipSync(tar);
+  const plain = options.trailing ? Buffer.concat([gz, Buffer.alloc(options.trailing)]) : gz;
+  fs.mkdirSync(path.dirname(destFile), { recursive: true });
+  await pipeline(
+    Readable.from(encryptStream(Readable.from([plain]), key, { chunkLog2: options.chunkLog2 })),
+    fs.createWriteStream(destFile),
+  );
+}
+
+/**
+ * Re-pack a bundle after changing its member list, to make hostile or odd archives out of a real
+ * one. The manifest's counts are recomputed unless `recount` is false.
+ */
+export async function rewriteBundle(
+  file: string,
+  key: Buffer,
+  destFile: string,
+  edit: (items: PackItem[]) => PackItem[],
+  options: { recount?: boolean; manifest?: (manifest: BundleManifest) => void } = {},
+): Promise<void> {
+  const items: PackItem[] = [];
+  for await (const entry of readTar(openBundleStream(file, key))) {
+    const parts: Buffer[] = [];
+    for await (const part of entry.body) parts.push(part);
+    items.push({ meta: { ...entry.meta }, content: entry.meta.type === 'file' ? Buffer.concat(parts) : undefined });
+  }
+  const manifest = JSON.parse(items[0].content!.toString('utf8')) as BundleManifest;
+  const rest = edit(items.slice(1));
+  options.manifest?.(manifest);
+  if (options.recount !== false) {
+    const files = rest.filter((item) => item.meta.type === 'file');
+    manifest.contents = {
+      entries: rest.length + 1,
+      files: files.length + 1,
+      bytes: files.reduce((sum, item) => sum + item.meta.size, 0),
+    };
+  }
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+  const all: PackItem[] = [{ meta: { ...items[0].meta, size: manifestBytes.length }, content: manifestBytes }, ...rest];
+  const tar = Buffer.concat(await collectTar(packEntries(all)));
+  await sealTar(tar, key, destFile);
+}
+
+async function collectTar(source: AsyncIterable<Buffer>): Promise<Buffer[]> {
+  const parts: Buffer[] = [];
+  for await (const part of source) parts.push(part);
+  return parts;
+}
+
+/** A regular-file item with in-memory content, for hand-made archives. */
+export function fileEntry(archivePath: string, content: string | Buffer): PackItem {
+  const buf = Buffer.from(content);
+  return {
+    meta: { path: archivePath, type: 'file', mode: 0o600, uid: 0, gid: 0, mtime: 1_700_000_000, size: buf.length },
+    content: buf,
+  };
+}
+
+/** A symlink item for hand-made archives. */
+export function linkEntry(archivePath: string, target: string): PackItem {
+  return {
+    meta: {
+      path: archivePath,
+      type: 'symlink',
+      mode: 0o777,
+      uid: 0,
+      gid: 0,
+      mtime: 1_700_000_000,
+      size: 0,
+      linkpath: target,
+    },
+  };
 }

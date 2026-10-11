@@ -4,13 +4,20 @@ import os from 'node:os';
 import path from 'node:path';
 
 import Database from 'better-sqlite3';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TXN_DIR, createBundle } from './bundle.js';
 import { generateKey } from './crypto.js';
-import { createSyntheticInstall, makeHost, type SyntheticInstall } from './fixtures/synthetic-install.js';
+import {
+  createSyntheticInstall,
+  fileEntry,
+  makeHost,
+  rewriteBundle,
+  type SyntheticInstall,
+} from './fixtures/synthetic-install.js';
 import {
   RestoreError,
+  assertLinksContained,
   commitRestore,
   filterEnvForRehearsal,
   mergeTargetOwnedEnv,
@@ -56,6 +63,7 @@ beforeEach(async () => {
   await createBundle({ host: source.host, key, destFile: bundleFile });
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -361,5 +369,236 @@ describe('finished transactions', () => {
     await rollbackRestore(target.host, second.txn);
     expect(fs.readdirSync(path.join(target.project, TXN_DIR))).toEqual([second.txn]);
     await expect(commitRestore(target.host, second.txn)).rejects.toMatchObject({ code: 'nothing_to_roll_back' });
+  });
+});
+
+describe('interrupted or failing swap', () => {
+  const roots = (): string[] => ['data', 'groups', 'store'].map((name) => path.join(target.project, name));
+  // Opening the central database (to plan the restore) leaves its -wal/-shm files behind; they are not part of the comparison.
+  const snapshot = (): string[][] => roots().map((dir) => tree(dir).filter((name) => !/\.db-(?:wal|shm)$/.test(name)));
+  const inLiveRoot = (file: unknown): boolean => roots().some((dir) => String(file).startsWith(`${dir}${path.sep}`));
+  const insideTxn = (file: unknown): boolean => String(file).includes(TXN_DIR);
+
+  it('puts the unmoved originals back when a move fails halfway, and loses nothing', async () => {
+    const before = snapshot();
+    const real = fs.renameSync;
+    let moves = 0;
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      // The second child leaving data/ fails once (a permission or cross-device error, say).
+      if (inLiveRoot(from) && String(to).includes(`${path.sep}previous${path.sep}`) && ++moves === 2)
+        throw Object.assign(new Error('simulated rename failure'), { code: 'EACCES' });
+      real(from, to);
+    });
+    await expect(restoreBundle({ host: target.host, bundleFile, key, mode: 'full' })).rejects.toThrow(
+      'simulated rename failure',
+    );
+    vi.restoreAllMocks();
+    expect(snapshot()).toEqual(before);
+    expect(query(path.join(target.project, 'data', 'v2.db'), 'SELECT id FROM agent_groups')).toEqual([{ id: 't1' }]);
+  });
+
+  it('keeps the transaction when the rollback fails too, and a later rollback restores everything', async () => {
+    const before = snapshot();
+    const real = fs.renameSync;
+    let broken = false;
+    let moves = 0;
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (inLiveRoot(from) && String(to).includes(`${path.sep}previous${path.sep}`) && ++moves === 2) broken = true;
+      // From then on every move touching a live root fails: the restore and its own rollback.
+      if (broken && (inLiveRoot(from) || (inLiveRoot(to) && !insideTxn(to))))
+        throw Object.assign(new Error('simulated persistent failure'), { code: 'EACCES' });
+      real(from, to);
+    });
+    const failure = await restoreBundle({ host: target.host, bundleFile, key, mode: 'full' }).catch((e: unknown) => e);
+    vi.restoreAllMocks();
+    expect(failure).toMatchObject({ code: 'rollback_failed' });
+    const txns = fs.readdirSync(path.join(target.project, TXN_DIR)).filter((name) => /^\d{8}T/.test(name));
+    expect(txns).toHaveLength(1);
+    const journal = JSON.parse(fs.readFileSync(path.join(target.project, TXN_DIR, txns[0], 'journal.json'), 'utf8'));
+    expect(journal.state).toBe('swapping');
+    // Nothing was deleted: the originals not yet moved are still in the root, the rest is in previous/.
+    expect(fs.readdirSync(path.join(target.project, 'data')).length).toBeGreaterThan(1);
+    await rollbackRestore(target.host, txns[0]);
+    expect(snapshot()).toEqual(before);
+    expect(query(path.join(target.project, 'data', 'v2.db'), 'SELECT id FROM agent_groups')).toEqual([{ id: 't1' }]);
+  });
+
+  it('reverts settings written before a later step failed, from what is saved on disk', async () => {
+    fs.writeFileSync(path.join(source.home, 'sender-allowlist.json'), '{"label":"source"}');
+    const file = path.join(tmp, 'bundles', 'two-settings.mbk');
+    await createBundle({ host: source.host, key, destFile: file });
+    // The second settings file cannot be replaced: its place holds a directory.
+    fs.mkdirSync(path.join(target.home, 'sender-allowlist.json'));
+    await expect(restoreBundle({ host: target.host, bundleFile: file, key, mode: 'full' })).rejects.toBeTruthy();
+    expect(fs.readFileSync(path.join(target.home, 'mount-allowlist.json'), 'utf8')).toContain('target');
+    expect(fs.readdirSync(target.home).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+    expect(fs.readFileSync(path.join(target.project, '.env'), 'utf8')).toContain('NANOCLAW_NAME=target');
+  });
+});
+
+describe('machine settings in a bundle', () => {
+  async function craft(...extra: Array<[string, string]>): Promise<string> {
+    const file = path.join(tmp, 'bundles', 'crafted.mbk');
+    await rewriteBundle(bundleFile, key, file, (items) => [
+      ...items,
+      ...extra.map(([name, content]) => fileEntry(`config/nanoclaw/${name}`, content)),
+    ]);
+    return file;
+  }
+
+  it('restores only the known settings files and never the scheduled-backup key', async () => {
+    fs.writeFileSync(path.join(target.home, 'scheduled-backup.key'), 'target-key');
+    const file = await craft(['scheduled-backup.key', 'attacker-key'], ['planted.sh', 'x']);
+    const result = await restoreBundle({ host: target.host, bundleFile: file, key, mode: 'full' });
+    expect(fs.readFileSync(path.join(target.home, 'scheduled-backup.key'), 'utf8')).toBe('target-key');
+    expect(fs.existsSync(path.join(target.home, 'planted.sh'))).toBe(false);
+    expect(result.configReplaced).toEqual(['mount-allowlist.json']);
+    expect(result.configSkipped.sort()).toEqual(['planted.sh', 'scheduled-backup.key']);
+  });
+
+  it('takes identity files only on request, even when the bundle carries them', async () => {
+    const file = await craft(['device-key.json', 'bundle-device-key'], ['host-id', 'bundle-host']);
+    await restoreBundle({ host: target.host, bundleFile: file, key, mode: 'full' });
+    expect(fs.readFileSync(path.join(target.home, 'device-key.json'), 'utf8')).toBe('target-device-key');
+    expect(fs.existsSync(path.join(target.home, 'host-id'))).toBe(false);
+  });
+
+  it('does not restore an allowlist that is not valid JSON', async () => {
+    const file = await craft(['sender-allowlist.json', '{broken']);
+    const result = await restoreBundle({ host: target.host, bundleFile: file, key, mode: 'full' });
+    expect(fs.existsSync(path.join(target.home, 'sender-allowlist.json'))).toBe(false);
+    expect(result.configSkipped).toContain('sender-allowlist.json');
+  });
+});
+
+describe('transaction ids and the restore lock', () => {
+  it('refuses an id that is not a transaction id', async () => {
+    for (const id of ['../..', '../x', '', 'x/../y', '20260101T000000Z-zzzzzz'])
+      for (const act of [rollbackRestore, commitRestore])
+        await expect(act(target.host, id)).rejects.toMatchObject({ code: 'invalid_transaction' });
+  });
+
+  it('refuses a second restore, rollback or commit while one holds the lock', async () => {
+    const lock = path.join(target.project, TXN_DIR, '.lock');
+    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    fs.writeFileSync(lock, `${process.pid} held\n`);
+    const id = '20260101T000000Z-abcdef';
+    await expect(restoreBundle({ host: target.host, bundleFile, key, mode: 'full' })).rejects.toMatchObject({
+      code: 'restore_in_progress',
+    });
+    await expect(rollbackRestore(target.host, id)).rejects.toMatchObject({ code: 'restore_in_progress' });
+    await expect(commitRestore(target.host, id)).rejects.toMatchObject({ code: 'restore_in_progress' });
+    expect(fs.existsSync(lock)).toBe(true); // not ours: left alone
+  });
+
+  it('takes over a lock whose holder is gone and releases its own', async () => {
+    const lock = path.join(target.project, TXN_DIR, '.lock');
+    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    fs.writeFileSync(lock, '999999999 dead\n');
+    await restoreBundle({ host: target.host, bundleFile, key, mode: 'full' });
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+});
+
+describe('links in a restored tree', () => {
+  it('accepts links that stay inside and refuses ones that leave or loop', () => {
+    const root = path.join(tmp, 'staged');
+    fs.mkdirSync(path.join(root, 'a'), { recursive: true });
+    fs.symlinkSync('a', path.join(root, 'inside'));
+    fs.symlinkSync('/app/skills/x', path.join(root, 'container'));
+    fs.symlinkSync('missing', path.join(root, 'dangling'));
+    expect(() => assertLinksContained(root)).not.toThrow();
+    fs.symlinkSync('..', path.join(root, 'a', 'up'));
+    expect(() => assertLinksContained(root)).not.toThrow(); // up to the root itself
+    fs.symlinkSync('../..', path.join(root, 'a', 'out'));
+    expect(() => assertLinksContained(root)).toThrow(RestoreError);
+    fs.rmSync(path.join(root, 'a', 'out'));
+    fs.symlinkSync('loop2', path.join(root, 'loop1'));
+    fs.symlinkSync('loop1', path.join(root, 'loop2'));
+    expect(() => assertLinksContained(root)).toThrow(RestoreError);
+  });
+
+  it('does not follow a session link while neutralising a rehearsal', async () => {
+    const victim = path.join(tmp, 'victim');
+    fs.mkdirSync(path.join(victim, 'g', 's'), { recursive: true });
+    fs.copyFileSync(
+      path.join(source.project, 'data', 'v2-sessions', 'g1', 's1', 'inbound.db'),
+      path.join(victim, 'g', 's', 'inbound.db'),
+    );
+    const file = path.join(tmp, 'bundles', 'linked.mbk');
+    await rewriteBundle(bundleFile, key, file, (items) => [
+      ...items,
+      {
+        meta: {
+          path: 'data/v2-sessions/lnk',
+          type: 'symlink',
+          mode: 0o777,
+          uid: 0,
+          gid: 0,
+          mtime: 0,
+          size: 0,
+          linkpath: '.',
+        },
+      },
+    ]);
+    await restoreBundle({ host: target.host, bundleFile: file, key, mode: 'rehearsal' });
+    expect(query(path.join(victim, 'g', 's', 'inbound.db'), "SELECT status FROM messages_in WHERE id = 'm2'")).toEqual([
+      { status: 'pending' },
+    ]);
+  });
+});
+
+describe('rehearsal default-deny', () => {
+  it('drops names that look like keys, passphrases, credentials, cookies and DSNs, and URLs with credentials', () => {
+    const { kept, dropped } = filterEnvForRehearsal(
+      [
+        'NANOCLAW_SIGNING_KEY=x',
+        'OPENCODE_PASSPHRASE=x',
+        'NANOCLAW_DB_PASS=x',
+        'NANOCLAW_CRED_FILE=x',
+        'NANOCLAW_AUTH_MODE=x',
+        'NANOCLAW_COOKIE=x',
+        'NANOCLAW_ERROR_DSN=https://example.test/1',
+        'NANOCLAW_BACKEND_URL=https://user:hunter2@example.test/path',
+        'ASSISTANT_NAME=Invented',
+        'ASSISTANT_HAS_OWN_NUMBER=true',
+        'CONTAINER_MEMORY_LIMIT=2g',
+        'CONTAINER_UNKNOWN=1',
+        'NANOCLAW_PLAIN_URL=https://example.test/path',
+        'TZ=UTC',
+      ].join('\n'),
+    );
+    expect(kept.split('\n').sort()).toEqual([
+      'CONTAINER_MEMORY_LIMIT=2g',
+      'NANOCLAW_PLAIN_URL=https://example.test/path',
+      'TZ=UTC',
+    ]);
+    expect(dropped).toHaveLength(11);
+  });
+
+  it('closes every non-terminal inbound message and marks undelivered outbound ones failed', async () => {
+    const inbound = path.join(source.project, 'data', 'v2-sessions', 'g1', 's1', 'inbound.db');
+    const db = new Database(inbound);
+    db.exec(
+      "INSERT INTO messages_in VALUES ('m4','chat','processing','p'),('m5','task','retry','r'),('m6','chat','failed','f'),('m7','task','paused','q'),('m8','chat',NULL,'n')",
+    );
+    db.close();
+    const file = path.join(tmp, 'bundles', 'busy.mbk');
+    await createBundle({ host: source.host, key, destFile: file });
+    await restoreBundle({ host: target.host, bundleFile: file, key, mode: 'rehearsal' });
+    const session = path.join(target.project, 'data', 'v2-sessions', 'g1', 's1');
+    expect(query(path.join(session, 'inbound.db'), 'SELECT id, status FROM messages_in ORDER BY id')).toEqual([
+      { id: 'm1', status: 'paused' },
+      { id: 'm2', status: 'completed' },
+      { id: 'm3', status: 'completed' },
+      { id: 'm4', status: 'completed' },
+      { id: 'm5', status: 'paused' },
+      { id: 'm6', status: 'failed' },
+      { id: 'm7', status: 'paused' },
+      { id: 'm8', status: 'completed' },
+    ]);
+    expect(query(path.join(session, 'inbound.db'), 'SELECT message_out_id, status FROM delivered')).toEqual([
+      { message_out_id: '1', status: 'failed' },
+    ]);
   });
 });
