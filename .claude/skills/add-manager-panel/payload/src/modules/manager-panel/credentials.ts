@@ -114,6 +114,7 @@ function liveSweepDeps(): SweepDeps {
       try {
         process.kill(pid, 0);
         return true;
+        // eslint-disable-next-line no-catch-all/no-catch-all -- ESRCH means gone, EPERM means alive; anything else counts as gone
       } catch (error) {
         return (error as NodeJS.ErrnoException).code === 'EPERM';
       }

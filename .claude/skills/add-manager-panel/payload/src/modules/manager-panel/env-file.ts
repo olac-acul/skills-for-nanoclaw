@@ -11,6 +11,7 @@ const KEY = /^[A-Z][A-Z0-9_]*$/;
 // `[` and `]` are literal in an unquoted .env value; they let an IPv6 endpoint such as http://[fd00::1]:8000/v1 through.
 const SAFE_VALUE = /^[A-Za-z0-9._:/@+=,%[\]-]{0,2048}$/;
 // A value that needs no quoting at all, even if it was typed by hand (`~`, for example).
+// eslint-disable-next-line no-control-regex -- control characters are exactly what is being excluded
 const PLAIN_VALUE = /^[^\s'"`$\\#\u0000-\u001f\u007f]{0,2048}$/;
 
 export class EnvFileError extends Error {
@@ -41,6 +42,7 @@ function unquote(value: string): string {
  */
 function restoredText(value: string): string | null {
   if (PLAIN_VALUE.test(value)) return value;
+  // eslint-disable-next-line no-control-regex -- control characters are exactly what is being excluded
   if (value.length > 2048 || /[\u0000-\u001f\u007f']/.test(value)) return null;
   return `'${value}'`;
 }
