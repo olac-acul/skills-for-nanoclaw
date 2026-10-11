@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { TARGET, generatedModule, headingIds, renderMarkdown, slugify } from './build-guide.mjs';
+import { SAFE_LINK, TARGET, generatedModule, headingIds, renderMarkdown, slugify } from './build-guide.mjs';
 
 const guide = readFileSync('docs/guide.md', 'utf8');
 const ui = readFileSync('.claude/skills/add-manager-panel/payload/src/modules/manager-panel/ui.ts', 'utf8');
@@ -54,4 +54,13 @@ test('author comments never reach the page', () => {
   assert.ok(!html.includes('privacy-scan'));
   assert.ok(!html.includes('--&gt;'));
   assert.match(html, /<p>Text more<\/p>/);
+});
+
+test('link targets use an allowed scheme and unsafe ones render as plain text', () => {
+  const markdown = readFileSync('docs/guide.md', 'utf8').replace(/```[\s\S]*?```/g, '');
+  for (const [, , url] of markdown.matchAll(/\[([^\]]+)\]\(([^)\s]+)\)/g)) assert.match(url, SAFE_LINK, `unsafe link target: ${url}`);
+  const html = renderMarkdown('[a](javascript:alert(1)) [b](data:text/html,x) [c](https://example.com) [d](#top)');
+  assert.ok(!/href="(javascript|data):/i.test(html));
+  assert.match(html, /<a href="https:\/\/example.com" target="_blank" rel="noopener noreferrer">c<\/a>/);
+  assert.match(html, /<a href="#top">d<\/a>/);
 });

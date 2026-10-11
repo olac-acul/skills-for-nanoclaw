@@ -15,6 +15,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+// Link targets the guide may use; anything else (javascript:, data:, ...) is rendered as plain label text.
+export const SAFE_LINK = /^(https?:|mailto:|\/|#)/i;
 export const SOURCE = 'docs/guide.md';
 export const TARGET = '.claude/skills/add-manager-panel/payload/src/modules/manager-panel/guide-html.ts';
 
@@ -64,6 +66,7 @@ function inline(text) {
   });
   work = escapeHtml(work);
   work = work.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label, url) => {
+    if (!SAFE_LINK.test(url)) return label;
     const external = /^https?:\/\//.test(url);
     return `<a href="${url}"${external ? ' target="_blank" rel="noopener noreferrer"' : ''}>${label}</a>`;
   });

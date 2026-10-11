@@ -411,7 +411,7 @@ function viewModel() {
       shown = key;
       clear(area);
       if (state.state === 'waiting' && state.url) {
-        area.appendChild(h('div', { class: 'notice' }, T.provider.signin_steps, ' ', h('a', { href: state.url, target: '_blank', rel: 'noopener noreferrer' }, state.url),
+        area.appendChild(h('div', { class: 'notice' }, T.provider.signin_steps, ' ', /^https:\/\//i.test(state.url) ? h('a', { href: state.url, target: '_blank', rel: 'noopener noreferrer' }, state.url) : h('span', {}, state.url),
           h('div', { class: 'key' }, state.code || '')));
         area.appendChild(h('button', { type: 'button', onclick: function () { api('DELETE', '/credentials/chatgpt/login').then(function () { show_({ state: 'idle' }); btn.disabled = false; }).catch(function () {}); } }, T.cancel));
       } else if (state.state === 'waiting') {
@@ -470,8 +470,8 @@ function viewModel() {
       clear(result); invalidate();
       if (!url.reportValidity()) return;
       api('POST', '/model/preflight', Object.assign(body(), model.value.trim() ? {} : { model: 'x' })).then(function (p) {
-        clear(list); p.models.forEach(function (id) { list.appendChild(h('option', { value: id })); });
-        if (!model.value.trim()) { result.appendChild(message('ok', T.provider.models_found + ': ' + (p.models.join(', ') || '-'))); return; }
+        clear(list); p.models.forEach(function (id) { list.appendChild(h('option', { value: String(id).slice(0, 200) })); });
+        if (!model.value.trim()) { result.appendChild(message('ok', T.provider.models_found + ': ' + (p.models.map(function (id) { return String(id).slice(0, 200); }).join(', ') || '-'))); return; }
         if (!p.ok) return result.appendChild(message('error', (T.errors[p.reason] || p.reason) + ''));
         checked = true; applyBtn.disabled = false;
         result.appendChild(message('ok', T.model.checked + ' ' + T.model.affected + ': ' + p.restarts_needed + (p.context_limit ? '. ' + T.model.context + ': ' + p.context_limit : '') + '.'));
@@ -615,7 +615,7 @@ function viewBackups() {
 
 var views = { overview: viewOverview, agents: viewAgents, model: viewModel, backups: viewBackups };
 // The current page lives in the address (#model), so leaving for the guide and coming back lands on the same page.
-function fromHash() { var name = location.hash.replace('#', ''); return views[name] ? name : 'overview'; }
+function fromHash() { var name = location.hash.replace('#', ''); return Object.prototype.hasOwnProperty.call(views, name) ? name : 'overview'; }
 function render(name) { state.view = name; renderNav(); views[name](); }
 function go(name) { if (location.hash === '#' + name) render(name); else location.hash = name; }
 window.addEventListener('hashchange', function () { if (state.csrf) render(fromHash()); });
