@@ -65,6 +65,7 @@ payload/src/modules/manager-panel/server.test.ts -> src/modules/manager-panel/se
 payload/src/modules/manager-panel/server.ts -> src/modules/manager-panel/server.ts
 payload/src/modules/manager-panel/sessions.ts -> src/modules/manager-panel/sessions.ts
 payload/src/modules/manager-panel/state.ts -> src/modules/manager-panel/state.ts
+payload/src/modules/manager-panel/ui-script.test.ts -> src/modules/manager-panel/ui-script.test.ts
 payload/src/modules/manager-panel/ui.ts -> src/modules/manager-panel/ui.ts
 payload/src/modules/manager-panel/upstream-backend.test.ts -> src/modules/manager-panel/upstream-backend.test.ts
 payload/src/modules/manager-panel/upstream-backend.ts -> src/modules/manager-panel/upstream-backend.ts

@@ -50,6 +50,7 @@ src/modules/manager-panel/server.test.ts
 src/modules/manager-panel/server.ts
 src/modules/manager-panel/sessions.ts
 src/modules/manager-panel/state.ts
+src/modules/manager-panel/ui-script.test.ts
 src/modules/manager-panel/ui.ts
 src/modules/manager-panel/upstream-backend.test.ts
 src/modules/manager-panel/upstream-backend.ts

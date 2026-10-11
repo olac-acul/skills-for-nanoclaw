@@ -106,24 +106,19 @@ async function saveClaude(): Promise<void> {
   const value = await readSecret();
   try {
     const existing = findAnthropicSecret(onecli(['secrets', 'list']));
-    // The value goes through a private file rather than the command line, where other local users could read it.
-    withSecretFile(value, (file) => {
-      const create = (name: string): string =>
-        onecli(['secrets', 'create', '--name', name, '--type', 'anthropic', '--file', file, '--host-pattern', ANTHROPIC_HOST]);
-      if (!existing?.id) {
-        create(ANTHROPIC_NAME);
-        return;
-      }
-      try {
-        // Replacing in place keeps the secret's identity and the agents' access to it.
-        onecli(['secrets', 'update', '--id', existing.id, '--file', file]);
-        // eslint-disable-next-line no-catch-all/no-catch-all -- a CLI without `update --file` falls back to delete and recreate
-      } catch {
-        // Fallback: the new secret has a new id, so agent access to it must be granted again.
-        onecli(['secrets', 'delete', '--id', existing.id]);
-        create(existing.name ?? ANTHROPIC_NAME);
-      }
-    });
+    if (existing?.id) {
+      // `onecli secrets update` takes the value only as an argument (no file, no stdin; checked against the real
+      // CLI), so an in-place replacement, which keeps the secret's id and the agents' access to it, has to put it
+      // on the command line for the length of one short call. The `--value=` form also keeps a value that starts
+      // with a dash from being read as an option. Deleting and recreating through a private file would hide the
+      // value but give the secret a new id and drop the agents' grants on every save, which is worse.
+      onecli(['secrets', 'update', '--id', existing.id, `--value=${value}`]);
+    } else {
+      // A new secret does go through a private file rather than the command line.
+      withSecretFile(value, (file) => {
+        onecli(['secrets', 'create', '--name', ANTHROPIC_NAME, '--type', 'anthropic', '--file', file, '--host-pattern', ANTHROPIC_HOST]);
+      });
+    }
     emit({ type: 'done' });
     // eslint-disable-next-line no-catch-all/no-catch-all -- the gateway's message could contain the value; only a code leaves
   } catch {

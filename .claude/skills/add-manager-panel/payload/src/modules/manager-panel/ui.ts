@@ -194,7 +194,7 @@ var T = {
   errors: {
     invalid_credentials: 'Wrong password.', login_throttled: 'Too many attempts. Wait a moment and try again.', invalid_setup_code: 'That setup code is not valid.',
     password_too_short: 'The password is too short.', password_too_long: 'The password is too long.', already_configured: 'An administrator already exists.',
-    unauthenticated: 'Your session ended. Sign in again.', reauth_required: 'Confirm your password first.', rate_limited: 'Too many requests. Slow down.',
+    unauthenticated: 'Your session ended. Sign in again.', reauth_required: 'Confirm your password first.', rate_limited: 'Too many requests. Slow down.', login_busy: 'Another sign-in check is running. Try again in a moment.', setup_in_progress: 'Setup is already in progress.', backup_key_pending: 'A backup finished in another session and its key has not been collected yet. Use that session, or wait a few minutes.',
     agents_busy: 'Agents are still running. Try again later or back up anyway.', probe_failed: 'The endpoint did not pass its checks',
     model_not_found: 'The endpoint does not list that model.', credential_missing: 'Store the credential first.', invalid_secret: 'That does not look like a key or token.',
     save_failed: 'The credential gateway did not accept it.', remove_failed: 'The credential could not be removed.', credential_in_use: 'The agents use this credential right now. Switch to another provider first.', login_failed: 'The sign-in did not complete.', login_timeout: 'The sign-in took too long.', login_cancelled: 'The sign-in was cancelled.',
@@ -411,7 +411,7 @@ function viewModel() {
       shown = key;
       clear(area);
       if (state.state === 'waiting' && state.url) {
-        area.appendChild(h('div', { class: 'notice' }, T.provider.signin_steps, ' ', /^https:\/\//i.test(state.url) ? h('a', { href: state.url, target: '_blank', rel: 'noopener noreferrer' }, state.url) : h('span', {}, state.url),
+        area.appendChild(h('div', { class: 'notice' }, T.provider.signin_steps, ' ', String(state.url).toLowerCase().indexOf('https://') === 0 ? h('a', { href: state.url, target: '_blank', rel: 'noopener noreferrer' }, state.url) : h('span', {}, state.url),
           h('div', { class: 'key' }, state.code || '')));
         area.appendChild(h('button', { type: 'button', onclick: function () { api('DELETE', '/credentials/chatgpt/login').then(function () { show_({ state: 'idle' }); btn.disabled = false; }).catch(function () {}); } }, T.cancel));
       } else if (state.state === 'waiting') {
