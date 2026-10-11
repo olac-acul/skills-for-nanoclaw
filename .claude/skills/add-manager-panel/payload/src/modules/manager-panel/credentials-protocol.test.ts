@@ -25,6 +25,25 @@ describe('parseDeviceOutput', () => {
     expect(parseDeviceOutput('Go to: http://evil.test/x\nEnter code: ABCD-1234\n')).toBeNull();
     expect(parseDeviceOutput('')).toBeNull();
   });
+  it('accepts only OpenAI hosts for the sign-in page', () => {
+    const page = (url: string) => parseDeviceOutput(`Go to: ${url}\nEnter code: ABCD-1234\n`);
+    for (const url of [
+      'https://auth.openai.com/codex/device',
+      'https://openai.com/x',
+      'https://chatgpt.com/auth',
+      'https://login.chatgpt.com/auth',
+    ])
+      expect(page(url)).not.toBeNull();
+    for (const url of [
+      'https://evil.test/openai.com',
+      'https://openai.com.evil.test/x',
+      'https://notopenai.com/x',
+      'https://auth.openai.com@evil.test/x',
+      'https://auth.openai.com:8443/x',
+      'https://chatgpt.com.evil.test/x',
+    ])
+      expect(page(url)).toBeNull();
+  });
   it('strips terminal escapes', () => {
     expect(stripAnsi('\u001b[1mbold\u001b[0m\u001b[?25l')).toBe('bold');
   });
@@ -62,10 +81,16 @@ describe('findAnthropicSecret', () => {
           ],
         }),
       ),
-    ).toEqual({ id: 'b2' });
+    ).toEqual({ id: 'b2', name: 'Anthropic' });
+    expect(findAnthropicSecret(JSON.stringify({ data: [{ id: 'c3', name: 'Anthropic', type: 'generic' }] }))).toEqual({
+      id: 'c3',
+      name: 'Anthropic',
+    });
+  });
+  it('does not claim an unrelated secret whose name merely contains "anthropic"', () => {
     expect(
-      findAnthropicSecret(JSON.stringify({ data: [{ id: 'c3', name: 'my anthropic key', type: 'generic' }] })),
-    ).toEqual({ id: 'c3' });
+      findAnthropicSecret(JSON.stringify({ data: [{ id: 'd4', name: 'my anthropic-proxy', type: 'generic' }] })),
+    ).toBeNull();
   });
   it('returns null when there is none, even for an empty or odd list', () => {
     expect(findAnthropicSecret(JSON.stringify({ data: [] }))).toBeNull();
@@ -83,14 +108,15 @@ describe('events', () => {
       encodeEvent({ type: 'status', claude: true, openaiKey: false, chatgptLogin: true }).trim(),
       '{"type":"surprise"}',
       '{broken json',
-      encodeEvent({ type: 'prompt', url: 'https://auth.example.test/device', code: 'AB-12' }).trim(),
+      encodeEvent({ type: 'prompt', url: 'https://auth.openai.com/device', code: 'AB-12' }).trim(),
       '{"type":"prompt","url":"http://insecure.test","code":"X"}',
+      '{"type":"prompt","url":"https://evil.test/device","code":"X"}',
       '{"type":"error","code":"not-a-known-code"}',
       encodeEvent({ type: 'done' }).trim(),
     ].join('\n');
     expect(parseEvents(text)).toEqual([
       { type: 'status', claude: true, openaiKey: false, chatgptLogin: true },
-      { type: 'prompt', url: 'https://auth.example.test/device', code: 'AB-12' },
+      { type: 'prompt', url: 'https://auth.openai.com/device', code: 'AB-12' },
       { type: 'error', code: 'script_failed' },
       { type: 'done' },
     ]);

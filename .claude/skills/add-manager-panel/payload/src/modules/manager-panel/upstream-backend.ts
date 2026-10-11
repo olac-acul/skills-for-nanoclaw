@@ -64,7 +64,7 @@ export function createModelPorts(
   const envFile = path.join(options.projectRoot, '.env');
   return {
     readEnv: (keys) => readEnvKeys(envFile, keys),
-    updateEnv: (changes) => updateEnvKeys(envFile, changes),
+    updateEnv: (changes, options) => updateEnvKeys(envFile, changes, options),
     async listGroups(): Promise<GroupModel[]> {
       // Every group gets a config row before it is read, so none is skipped.
       for (const group of await getAllAgentGroups()) await ensureContainerConfig(group.id);

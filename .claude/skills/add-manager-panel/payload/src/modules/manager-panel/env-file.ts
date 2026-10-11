@@ -4,10 +4,14 @@
  * keep the file private. Values are restricted to a conservative character set
  * so nothing typed in a browser can inject another line or a quote.
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 const KEY = /^[A-Z][A-Z0-9_]*$/;
-const SAFE_VALUE = /^[A-Za-z0-9._:/@+=,%-]{0,2048}$/;
+// `[` and `]` are literal in an unquoted .env value; they let an IPv6 endpoint such as http://[fd00::1]:8000/v1 through.
+const SAFE_VALUE = /^[A-Za-z0-9._:/@+=,%[\]-]{0,2048}$/;
+// A value that needs no quoting at all, even if it was typed by hand (`~`, for example).
+const PLAIN_VALUE = /^[^\s'"`$\\#\u0000-\u001f\u007f]{0,2048}$/;
 
 export class EnvFileError extends Error {
   constructor(
@@ -26,10 +30,24 @@ function lineKey(line: string): string | null {
 
 function unquote(value: string): string {
   const trimmed = value.trim();
-  if (trimmed.length >= 2 && (trimmed[0] === '"' || trimmed[0] === "'") && trimmed.endsWith(trimmed[0])) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
+  const quoted = /^(["'])(.*?)\1(?:\s+#.*)?$/.exec(trimmed);
+  if (quoted) return quoted[2];
+  return trimmed.replace(/\s+#.*$/, ''); // an unquoted value ends at an inline comment
+}
+
+/**
+ * How a value read from the file is written back: as is when it needs no quoting, in single quotes
+ * otherwise, null when it cannot be represented on one line.
+ */
+function restoredText(value: string): string | null {
+  if (PLAIN_VALUE.test(value)) return value;
+  if (value.length > 2048 || /[\u0000-\u001f\u007f']/.test(value)) return null;
+  return `'${value}'`;
+}
+
+/** Whether `updateEnvKeys(..., { restore: true })` can put this previously read value back. */
+export function canRestoreValue(value: string | null): boolean {
+  return value === null || restoredText(value) !== null;
 }
 
 /** Current values of the requested keys (null when absent). The last assignment wins. */
@@ -53,10 +71,19 @@ export function readEnvKeys(file: string, keys: readonly string[]): Record<strin
  * can restore them. Existing assignments are replaced in place; new keys are
  * appended; duplicates of a changed key are dropped.
  */
-export function updateEnvKeys(file: string, changes: Record<string, string | null>): Record<string, string | null> {
+export function updateEnvKeys(
+  file: string,
+  changes: Record<string, string | null>,
+  options: { restore?: boolean } = {},
+): Record<string, string | null> {
+  // A restore puts back values that were read from the file, which may have been written by hand
+  // and so fail the strict check for new values; they are still kept to one line and quoted if needed.
+  const render = (value: string): string | null => (options.restore ? restoredText(value) : value);
   for (const [key, value] of Object.entries(changes)) {
     if (!KEY.test(key)) throw new EnvFileError('invalid_key', `invalid key ${JSON.stringify(key)}`);
-    if (value !== null && !SAFE_VALUE.test(value)) throw new EnvFileError('invalid_value', `invalid value for ${key}`);
+    if (value === null) continue;
+    if (options.restore ? restoredText(value) === null : !SAFE_VALUE.test(value))
+      throw new EnvFileError('invalid_value', `invalid value for ${key}`);
   }
   const before = readEnvKeys(file, Object.keys(changes));
   let text = '';
@@ -78,20 +105,31 @@ export function updateEnvKeys(file: string, changes: Record<string, string | nul
     }
     const next = changes[key];
     if (next === null || written.has(key)) continue; // removed, or a duplicate of a key already written
-    out.push(`${key}=${next}`);
+    out.push(`${key}=${render(next)}`);
     written.add(key);
   }
   for (const [key, value] of Object.entries(changes)) {
-    if (value !== null && !written.has(key)) out.push(`${key}=${value}`);
+    if (value !== null && !written.has(key)) out.push(`${key}=${render(value)}`);
   }
-  const temporary = `${file}.${process.pid}.tmp`;
-  const fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC, mode);
+  // A fresh, exclusively created name: nothing already there (a leftover file, a symlink) is reused or followed.
+  const temporary = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  const fd = fs.openSync(
+    temporary,
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
+    mode,
+  );
   try {
-    fs.writeSync(fd, out.length ? `${out.join('\n')}\n` : '');
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
+    try {
+      fs.writeSync(fd, out.length ? `${out.join('\n')}\n` : '');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    // The temporary file holds every secret in the .env; never leave it behind.
+    fs.rmSync(temporary, { force: true });
+    throw error;
   }
-  fs.renameSync(temporary, file);
   return before;
 }

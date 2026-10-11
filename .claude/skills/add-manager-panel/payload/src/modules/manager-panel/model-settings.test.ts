@@ -387,3 +387,72 @@ describe('detectProvider', () => {
     expect(detectProvider({}, [group('opencode')])).toEqual({ kind: 'unknown', auth: null });
   });
 });
+
+describe('hardening', () => {
+  it('serialises changes: a concurrent apply fails at once and leaves the first one intact', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    ports.probe = async () => {
+      await gate;
+      return GOOD;
+    };
+    const first = applyModelChange(ports, input);
+    await expect(applyModelChange(ports, input)).rejects.toMatchObject({ code: 'change_in_progress' });
+    await expect(recoverModelChange(ports)).rejects.toMatchObject({ code: 'change_in_progress' });
+    release();
+    await expect(first).resolves.toMatchObject({ groups: 2 });
+    // The lock is released afterwards, even for a failed change.
+    ports.probeResult = { ...GOOD, reason: 'endpoint_unreachable' };
+    ports.probe = async () => ports.probeResult;
+    await expect(applyModelChange(ports, input)).rejects.toMatchObject({ code: 'probe_failed' });
+    ports.probeResult = GOOD;
+    await expect(applyModelChange(ports, input)).resolves.toBeDefined();
+  });
+
+  it('refuses to start when a current value could not be restored, and changes nothing', async () => {
+    ports.env.OPENCODE_BASE_URL = 'it\'s "both"';
+    await expect(applyModelChange(ports, input)).rejects.toMatchObject({ detail: 'env_not_restorable' });
+    expect(ports.journal).toBeNull();
+    expect(ports.env.OPENCODE_MODEL).toBe('openrouter/old');
+  });
+
+  it('restores with the restore option, so hand-written previous values come back', async () => {
+    const restoreCalls: Array<boolean | undefined> = [];
+    const update = ports.updateEnv.bind(ports);
+    ports.updateEnv = (changes, options) => {
+      restoreCalls.push(options?.restore);
+      return update(changes);
+    };
+    ports.failOn.setGroup = 'g2';
+    await expect(applyModelChange(ports, input)).rejects.toMatchObject({ code: 'apply_failed_rolled_back' });
+    expect(restoreCalls).toEqual([undefined, true]);
+  });
+
+  it('recovery ignores keys that are not managed settings and malformed groups', async () => {
+    const written: Array<Record<string, string | null>> = [];
+    ports.updateEnv = (changes) => {
+      written.push(changes);
+      return {};
+    };
+    ports.journal = {
+      startedAt: 'x',
+      env: { OPENCODE_MODEL: 'openai/old', NODE_OPTIONS: '--require /x.js', OPENCODE_PROVIDER: 5 as never },
+      groups: [{ id: 'g1', provider: 'claude', model: null }, { id: 7 } as never],
+    };
+    expect(await recoverModelChange(ports)).toBe('rolled-back');
+    expect(Object.keys(written[0]).sort()).toEqual(['OPENCODE_MODEL']);
+    expect(ports.restarts).toEqual(['g1']);
+  });
+
+  it('puts only a stable code in the error detail, never the raw message', async () => {
+    ports.updateEnv = () => {
+      throw new Error('EACCES: permission denied, open /srv/host.test/.env');
+    };
+    const error = (await applyModelChange(ports, input).catch((e: unknown) => e)) as ModelSettingsError;
+    expect(error.code).toBe('apply_failed_rollback_incomplete');
+    expect(error.detail).toBe('rollback_incomplete');
+    expect(JSON.stringify(error)).not.toContain('EACCES');
+    ports.journal = null;
+    ports.env = {};
+  });
+});

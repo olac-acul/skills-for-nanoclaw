@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { EnvFileError, readEnvKeys, updateEnvKeys } from './env-file.js';
+import { canRestoreValue, EnvFileError, readEnvKeys, updateEnvKeys } from './env-file.js';
 
 let dir: string;
 let file: string;
@@ -44,6 +44,43 @@ describe('updateEnvKeys', () => {
       expect(fs.existsSync(file)).toBe(false);
     },
   );
+
+  it('accepts an IPv6 literal URL', () => {
+    updateEnvKeys(file, { A: 'http://[fd00::1]:8000/v1' });
+    expect(readEnvKeys(file, ['A']).A).toBe('http://[fd00::1]:8000/v1');
+  });
+
+  it('restores hand-written values that fail the strict check for new ones', () => {
+    fs.writeFileSync(file, 'A=~/models\nB="two words"\nC=x # note\nD=\'it works\'\nE=plain\n');
+    const before = readEnvKeys(file, ['A', 'B', 'C', 'D', 'E']);
+    expect(before).toEqual({ A: '~/models', B: 'two words', C: 'x', D: 'it works', E: 'plain' });
+    updateEnvKeys(file, { A: 'new', B: 'new', C: 'new', D: 'new', E: null });
+    expect(() => updateEnvKeys(file, before)).toThrow(EnvFileError);
+    updateEnvKeys(file, before, { restore: true });
+    expect(readEnvKeys(file, ['A', 'B', 'C', 'D', 'E'])).toEqual(before);
+  });
+
+  it('still refuses to restore a value that cannot be kept to one line', () => {
+    expect(() => updateEnvKeys(file, { A: 'a\nB=1' }, { restore: true })).toThrow(EnvFileError);
+    expect(canRestoreValue('it\'s "both"')).toBe(false);
+    expect(canRestoreValue('two words')).toBe(true);
+  });
+
+  it('uses an exclusive temporary file and leaves none behind, even when the write fails', () => {
+    fs.writeFileSync(file, 'SECRET=1\n', { mode: 0o600 });
+    // A file or symlink planted at the old predictable name is not touched.
+    const victim = path.join(dir, 'victim');
+    fs.writeFileSync(victim, 'keep');
+    fs.symlinkSync(victim, `${file}.${process.pid}.tmp`);
+    updateEnvKeys(file, { A: 'b' });
+    expect(fs.readFileSync(victim, 'utf8')).toBe('keep');
+    fs.unlinkSync(`${file}.${process.pid}.tmp`);
+    // Failure after the temp file exists: rename onto a directory.
+    const target = path.join(dir, 'target');
+    fs.mkdirSync(target);
+    expect(() => updateEnvKeys(target, { A: 'b' })).toThrow();
+    expect(fs.readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  });
 
   it('rejects invalid keys', () => {
     expect(() => updateEnvKeys(file, { 'a=b': '1' })).toThrow(EnvFileError);

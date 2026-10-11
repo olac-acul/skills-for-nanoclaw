@@ -87,24 +87,43 @@ async function status(): Promise<void> {
   }
 }
 
+/** Run `fn` with the secret in a private file (0700 directory, 0600 file) that is always removed afterwards. */
+function withSecretFile<T>(value: string, fn: (file: string) => T): T {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manager-claude-'));
+  try {
+    const file = path.join(dir, 'secret');
+    fs.writeFileSync(file, value, { mode: 0o600, flag: 'wx' });
+    return fn(file);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const ANTHROPIC_NAME = 'Anthropic';
+const ANTHROPIC_HOST = 'api.anthropic.com';
+
 async function saveClaude(): Promise<void> {
   const value = await readSecret();
   try {
     const existing = findAnthropicSecret(onecli(['secrets', 'list']));
-    if (existing?.id) {
-      // Replacing keeps the secret's identity and the agents' access to it.
-      onecli(['secrets', 'update', '--id', existing.id, '--value', value]);
-    } else {
-      // The value goes through a private file rather than the command line.
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manager-claude-'));
-      try {
-        const file = path.join(dir, 'secret');
-        fs.writeFileSync(file, value, { mode: 0o600 });
-        onecli(['secrets', 'create', '--name', 'Anthropic', '--type', 'anthropic', '--file', file, '--host-pattern', 'api.anthropic.com']);
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
+    // The value goes through a private file rather than the command line, where other local users could read it.
+    withSecretFile(value, (file) => {
+      const create = (name: string): string =>
+        onecli(['secrets', 'create', '--name', name, '--type', 'anthropic', '--file', file, '--host-pattern', ANTHROPIC_HOST]);
+      if (!existing?.id) {
+        create(ANTHROPIC_NAME);
+        return;
       }
-    }
+      try {
+        // Replacing in place keeps the secret's identity and the agents' access to it.
+        onecli(['secrets', 'update', '--id', existing.id, '--file', file]);
+        // eslint-disable-next-line no-catch-all/no-catch-all -- a CLI without `update --file` falls back to delete and recreate
+      } catch {
+        // Fallback: the new secret has a new id, so agent access to it must be granted again.
+        onecli(['secrets', 'delete', '--id', existing.id]);
+        create(existing.name ?? ANTHROPIC_NAME);
+      }
+    });
     emit({ type: 'done' });
     // eslint-disable-next-line no-catch-all/no-catch-all -- the gateway's message could contain the value; only a code leaves
   } catch {
