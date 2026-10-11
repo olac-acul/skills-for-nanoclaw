@@ -8,7 +8,7 @@
 import { CryptoError } from '../manager-backup/crypto.js';
 import { BackupError } from '../manager-backup/service.js';
 import { AuthError, type Auth } from './auth.js';
-import type { BackupJobs, JobStatus } from './backup-job.js';
+import { BackupJobError, type BackupJobs, type JobStatus } from './backup-job.js';
 import type { PanelBackend } from './backend.js';
 import { CredentialError } from './credentials.js';
 import { isCredentialKind, validSecret } from './credentials-protocol.js';
@@ -60,6 +60,8 @@ export interface RouteContext {
   body: unknown;
   session: Session | null;
   token: string | undefined;
+  /** The peer address of the connection (never a forwarded header). */
+  address: string;
   deps: RouteDeps;
 }
 
@@ -165,7 +167,7 @@ export function buildRoutes(): Route[] {
       }),
     run: async (ctx) => {
       const { code, password } = ctx.body as { code: string; password: string };
-      const created = await ctx.deps.auth.setup(code, password);
+      const created = await ctx.deps.auth.setup(code, password, ctx.address);
       return {
         status: 200,
         body: sessionView(ctx.deps, created.session),
@@ -183,7 +185,7 @@ export function buildRoutes(): Route[] {
     limit: 'login',
     parse: (raw) => fields<{ password: string }>(raw, { password: { type: 'string', max: 4096 } }),
     run: async (ctx) => {
-      const created = await ctx.deps.auth.login((ctx.body as { password: string }).password, ctx.token);
+      const created = await ctx.deps.auth.login((ctx.body as { password: string }).password, ctx.address, ctx.token);
       return {
         status: 200,
         body: sessionView(ctx.deps, created.session),
@@ -226,7 +228,7 @@ export function buildRoutes(): Route[] {
     limit: 'login',
     parse: (raw) => fields<{ password: string }>(raw, { password: { type: 'string', max: 4096 } }),
     run: async (ctx) => {
-      await ctx.deps.auth.reauth(ctx.session!, (ctx.body as { password: string }).password);
+      await ctx.deps.auth.reauth(ctx.session!, (ctx.body as { password: string }).password, ctx.address);
       return { status: 200, body: sessionView(ctx.deps, ctx.session!) };
     },
   });
@@ -544,10 +546,10 @@ export function buildRoutes(): Route[] {
     limit: 'mutation',
     // `force` is accepted and ignored: a backup always goes ahead once the wait for busy agents is over.
     parse: (raw) => fields<{ force?: boolean }>(raw, { force: { type: 'boolean', optional: true } }),
-    run: async (ctx) => ({ status: 202, body: { job: jobView(ctx.deps.backupJobs.start()) } }),
+    run: async (ctx) => ({ status: 202, body: { job: jobView(ctx.deps.backupJobs.start(ctx.session!.id)) } }),
   });
 
-  // The progress of the backup, and, once, its key. Polled by the page while a backup runs.
+  // The progress of the backup, and, once, its key (only to the session that started it). Polled by the page while a backup runs.
   add({
     name: 'backup_job',
     method: 'GET',
@@ -556,7 +558,7 @@ export function buildRoutes(): Route[] {
     mutating: false,
     limit: 'read',
     parse: noBody,
-    run: async (ctx) => ({ status: 200, body: { job: jobView(ctx.deps.backupJobs.status()) } }),
+    run: async (ctx) => ({ status: 200, body: { job: jobView(ctx.deps.backupJobs.status(ctx.session!.id)) } }),
   });
 
   add({
@@ -651,6 +653,7 @@ export function toHttpError(error: unknown): HttpError {
       error.retryAfterSeconds ? { 'retry-after': String(error.retryAfterSeconds) } : {},
     );
   }
+  if (error instanceof BackupJobError) return new HttpError(409, error.code);
   if (error instanceof ModelSettingsError) {
     const status =
       error.code === 'invalid_input'

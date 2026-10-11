@@ -5,8 +5,8 @@
  *
  * One backup at a time. It waits up to a set time for agents to finish their current message (so the copy is
  * consistent), then goes ahead whether or not they did; the result records which it was (`quiescent` or
- * `best-effort`). The key is handed over exactly once, to the first status request that sees the finished
- * backup, and is not kept after that or beyond a few minutes.
+ * `best-effort`). The key belongs to the session that started the backup: it is handed over exactly once, to
+ * that session, and never to another one. It is not kept after that or beyond a few minutes.
  */
 import type { BackupRecord } from '../manager-backup/service.js';
 import type { BackupPort } from './backend.js';
@@ -27,7 +27,15 @@ export type JobStatus =
   | { state: 'done'; started_at: string; finished_at: string; backup: BackupRecord; key: string | null }
   | { state: 'error'; started_at: string; error: string };
 
+export class BackupJobError extends Error {
+  constructor(readonly code: 'backup_key_pending') {
+    super(code);
+  }
+}
+
 interface Job {
+  /** The session that started the backup and is the only one that may receive its key. */
+  owner: string;
   startedAt: number;
   phase: JobPhase;
   entries: number;
@@ -71,10 +79,14 @@ export class BackupJobs {
     return new Date(at).toISOString();
   }
 
-  /** Start a backup, or report the one already running. */
-  start(): JobStatus {
-    if (this.job && this.job.finishedAt === undefined) return this.status();
-    const job: Job = { startedAt: this.now(), phase: 'waiting', entries: 0, bytes: 0 };
+  /** Start a backup for a session, or report the one already running. */
+  start(owner: string): JobStatus {
+    const previous = this.job;
+    if (previous && previous.finishedAt === undefined) return this.status(owner);
+    // Another session's key still waiting to be collected must not be thrown away by starting over.
+    if (previous && previous.owner !== owner && this.keyWaiting(previous))
+      throw new BackupJobError('backup_key_pending');
+    const job: Job = { owner, startedAt: this.now(), phase: 'waiting', entries: 0, bytes: 0 };
     this.job = job;
     this.port
       .create({
@@ -98,11 +110,19 @@ export class BackupJobs {
           job.finishedAt = this.now();
         },
       );
-    return this.status();
+    return this.status(owner);
   }
 
-  /** Where the backup stands. A finished backup's key is returned once, then forgotten. */
-  status(): JobStatus {
+  private keyWaiting(job: Job): boolean {
+    return (
+      job.finishedAt !== undefined &&
+      Boolean(job.key) &&
+      this.now() - job.finishedAt <= (this.options.keyTtlMs ?? 15 * 60_000)
+    );
+  }
+
+  /** Where the backup stands. The starting session gets a finished backup's key once; everyone else never. */
+  status(session: string): JobStatus {
     const job = this.job;
     if (!job) return { state: 'idle' };
     const started_at = this.iso(job.startedAt);
@@ -119,8 +139,9 @@ export class BackupJobs {
     }
     if (job.error !== undefined) return { state: 'error', started_at, error: job.error };
     const expired = this.now() - job.finishedAt > (this.options.keyTtlMs ?? 15 * 60_000);
-    const key = expired ? null : (job.key ?? null);
-    job.key = null;
+    const mine = session === job.owner;
+    const key = expired || !mine ? null : (job.key ?? null);
+    if (mine || expired) job.key = null;
     return { state: 'done', started_at, finished_at: this.iso(job.finishedAt), backup: job.record!, key };
   }
 }

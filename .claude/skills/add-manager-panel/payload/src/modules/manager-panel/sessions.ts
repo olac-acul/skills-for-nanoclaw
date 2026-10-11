@@ -7,9 +7,12 @@
  * records the credential generation it was created under; a password change
  * or local reset bumps the generation and every older session stops working.
  *
- * The throttle is global (there is one account): after a few failures every
- * login waits, with a doubling lock persisted in the state directory. The
- * local `unlock` command clears it.
+ * The login throttle has two levels. Failures are counted per client address
+ * (per /64 for IPv6) and lock only that client, so one machine on the network
+ * cannot keep the administrator out. A global counter, persisted in the state
+ * directory, is only a high ceiling against many addresses together; a valid
+ * session can still re-authenticate while it is on. The local `unlock` command
+ * clears the global lock.
  */
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 
@@ -21,10 +24,15 @@ export const REAUTH_MS = 5 * 60 * 1000;
 export const MAX_SESSIONS = 8;
 
 const FREE_FAILURES = 5;
+const GLOBAL_FREE_FAILURES = 50;
+const GLOBAL_WINDOW_MS = 60 * 60 * 1000;
 const FIRST_LOCK_MS = 60 * 1000;
 const MAX_LOCK_MS = 60 * 60 * 1000;
+const MAX_TRACKED_CLIENTS = 4096;
 
 export interface Session {
+  /** Public to the server only: tells sessions apart (never sent to the browser). */
+  id: string;
   createdAt: number;
   lastSeen: number;
   reauthUntil: number | null;
@@ -57,6 +65,7 @@ export class SessionStore {
     const token = randomBytes(32).toString('base64url');
     const at = this.now();
     const session: Session = {
+      id: randomBytes(16).toString('hex'),
       createdAt: at,
       lastSeen: at,
       reauthUntil: null,
@@ -124,28 +133,97 @@ export class SessionStore {
   }
 }
 
+/**
+ * The key a client is counted under: the address, with IPv4-mapped IPv6 unwrapped and a whole /64 for IPv6
+ * (a single host controls every address in its /64).
+ */
+export function clientKey(address: string | undefined): string {
+  const raw = (address ?? 'unknown').toLowerCase().split('%')[0];
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(raw);
+  if (mapped) return mapped[1];
+  if (!raw.includes(':')) return raw;
+  const halves = raw.split('::');
+  if (halves.length > 2) return raw;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 2 ? missing < 1 : missing !== 0) return raw;
+  const groups = halves.length === 2 ? [...head, ...Array<string>(missing).fill('0'), ...tail] : head;
+  const prefix = groups.slice(0, 4).map((group) => (/^[0-9a-f]{1,4}$/.test(group) ? parseInt(group, 16) : NaN));
+  if (prefix.some(Number.isNaN)) return raw;
+  return `${prefix.map((n) => n.toString(16)).join(':')}::/64`;
+}
+
+interface ClientRecord {
+  failures: number;
+  lockedUntil: number;
+  last: number;
+}
+
+function lockFor(failures: number, free: number): number {
+  const over = failures - free;
+  return over > 0 ? Math.min(FIRST_LOCK_MS * 2 ** (over - 1), MAX_LOCK_MS) : 0;
+}
+
 export class LoginThrottle {
+  /** Per-client counters live in memory: they only have to hold against the client that is guessing. */
+  private readonly clients = new Map<string, ClientRecord>();
+
   constructor(
     private readonly state: PanelState,
     private readonly now: () => number = Date.now,
   ) {}
 
-  /** Milliseconds to wait before another attempt is allowed; 0 when free. */
-  waitMs(): number {
-    const { locked_until } = this.state.throttle();
-    if (!locked_until) return 0;
-    return Math.max(0, Date.parse(locked_until) - this.now());
+  /**
+   * Milliseconds this client must wait before another attempt; 0 when free. The global ceiling applies too,
+   * except for a caller that already holds a valid session.
+   */
+  waitMs(client: string, ignoreGlobal = false): number {
+    const at = this.now();
+    let wait = Math.max(0, (this.clients.get(client)?.lockedUntil ?? 0) - at);
+    if (!ignoreGlobal) {
+      const { locked_until } = this.state.throttle();
+      if (locked_until) wait = Math.max(wait, Date.parse(locked_until) - at);
+    }
+    return Math.max(0, wait);
   }
 
-  failure(): void {
-    const record = this.state.throttle();
-    const failures = record.failures + 1;
-    const over = failures - FREE_FAILURES;
-    const lock = over > 0 ? Math.min(FIRST_LOCK_MS * 2 ** (over - 1), MAX_LOCK_MS) : 0;
-    this.state.setThrottle({ failures, locked_until: lock ? new Date(this.now() + lock).toISOString() : null });
+  failure(client: string): void {
+    const at = this.now();
+    const record = this.clients.get(client) ?? { failures: 0, lockedUntil: 0, last: at };
+    // A client that has been quiet for the longest lock starts over.
+    if (at - record.last > MAX_LOCK_MS && record.lockedUntil <= at) record.failures = 0;
+    record.failures += 1;
+    record.last = at;
+    record.lockedUntil = at + lockFor(record.failures, FREE_FAILURES);
+    this.clients.delete(client);
+    this.clients.set(client, record);
+    this.trim(at);
+
+    // The persisted ceiling counts failures inside a one-hour window, so slow typos never add up to a lock.
+    const stored = this.state.throttle();
+    const windowStart = stored.window_start ? Date.parse(stored.window_start) : NaN;
+    const fresh = !(at - windowStart <= GLOBAL_WINDOW_MS) || at < windowStart;
+    const failures = fresh ? 1 : stored.failures + 1;
+    const lock = lockFor(failures, GLOBAL_FREE_FAILURES);
+    this.state.setThrottle({
+      failures,
+      locked_until: lock ? new Date(at + lock).toISOString() : null,
+      window_start: fresh ? new Date(at).toISOString() : stored.window_start,
+    });
   }
 
-  success(): void {
+  success(client: string): void {
+    this.clients.delete(client);
     this.state.setThrottle({ failures: 0, locked_until: null });
+  }
+
+  private trim(at: number): void {
+    if (this.clients.size <= MAX_TRACKED_CLIENTS) return;
+    for (const [key, record] of this.clients) {
+      if (record.lockedUntil <= at && at - record.last > MAX_LOCK_MS) this.clients.delete(key);
+    }
+    // Still full: drop the least recently failing client (Map keeps insertion order, failures re-insert).
+    while (this.clients.size > MAX_TRACKED_CLIENTS) this.clients.delete(this.clients.keys().next().value!);
   }
 }

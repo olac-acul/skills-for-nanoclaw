@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { BackupRecord } from '../manager-backup/service.js';
-import { BackupJobs } from './backup-job.js';
+import { BackupJobError, BackupJobs } from './backup-job.js';
 import type { BackupPort } from './backend.js';
 
 const RECORD: BackupRecord = {
@@ -52,12 +52,14 @@ function port(gate: Deferred) {
   return { backups, calls, report: (p: Parameters<NonNullable<typeof progress>>[0]) => progress?.(p) };
 }
 
+const OWNER = 'session-a';
+const OTHER = 'session-b';
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 describe('BackupJobs', () => {
   it('starts as idle', () => {
     const gate = deferred();
-    expect(new BackupJobs(port(gate).backups, { waitMs: 60_000 }).status()).toEqual({ state: 'idle' });
+    expect(new BackupJobs(port(gate).backups, { waitMs: 60_000 }).status(OWNER)).toEqual({ state: 'idle' });
   });
 
   it('goes ahead with a best-effort backup after waiting, and follows the phases', async () => {
@@ -66,20 +68,20 @@ describe('BackupJobs', () => {
     let clock = 1_000_000;
     const jobs = new BackupJobs(p.backups, { waitMs: 60_000, now: () => clock });
 
-    const first = jobs.start();
+    const first = jobs.start(OWNER);
     expect(first).toMatchObject({ state: 'running', phase: 'waiting', wait_seconds: 60, entries: 0 });
     // It never refuses because agents are busy: the force flag is always set, and the wait is the configured one.
     expect(p.calls).toEqual([{ waitMs: 60_000, force: true }]);
 
     p.report({ phase: 'snapshot', entries: 0, bytes: 0 });
     clock += 5_000;
-    expect(jobs.status()).toMatchObject({ phase: 'snapshot', elapsed_seconds: 5 });
+    expect(jobs.status(OWNER)).toMatchObject({ phase: 'snapshot', elapsed_seconds: 5 });
     p.report({ phase: 'pack', entries: 120, bytes: 4096 });
-    expect(jobs.status()).toMatchObject({ phase: 'pack', entries: 120, bytes: 4096 });
+    expect(jobs.status(OWNER)).toMatchObject({ phase: 'pack', entries: 120, bytes: 4096 });
 
     gate.resolve();
     await tick();
-    const done = jobs.status();
+    const done = jobs.status(OWNER);
     expect(done).toMatchObject({ state: 'done', key: KEY });
     expect((done as { backup: BackupRecord }).backup.consistency).toBe('best-effort');
   });
@@ -87,40 +89,40 @@ describe('BackupJobs', () => {
   it('hands the key over once and never again', async () => {
     const gate = deferred();
     const jobs = new BackupJobs(port(gate).backups, { waitMs: 0 });
-    jobs.start();
+    jobs.start(OWNER);
     gate.resolve();
     await tick();
-    expect((jobs.status() as { key: string | null }).key).toBe(KEY);
-    expect((jobs.status() as { key: string | null }).key).toBeNull();
-    expect(jobs.status()).toMatchObject({ state: 'done', key: null });
+    expect((jobs.status(OWNER) as { key: string | null }).key).toBe(KEY);
+    expect((jobs.status(OWNER) as { key: string | null }).key).toBeNull();
+    expect(jobs.status(OWNER)).toMatchObject({ state: 'done', key: null });
   });
 
   it('drops a key nobody collected within the time limit', async () => {
     const gate = deferred();
     let clock = 0;
     const jobs = new BackupJobs(port(gate).backups, { waitMs: 0, keyTtlMs: 60_000, now: () => clock });
-    jobs.start();
+    jobs.start(OWNER);
     gate.resolve();
     await tick();
     clock += 61_000;
-    expect(jobs.status()).toMatchObject({ state: 'done', key: null });
+    expect(jobs.status(OWNER)).toMatchObject({ state: 'done', key: null });
   });
 
   it('runs one backup at a time: a second start reports the one in progress', async () => {
     const gate = deferred();
     const p = port(gate);
     const jobs = new BackupJobs(p.backups, { waitMs: 0 });
-    jobs.start();
-    expect(jobs.start()).toMatchObject({ state: 'running' });
+    jobs.start(OWNER);
+    expect(jobs.start(OWNER)).toMatchObject({ state: 'running' });
     expect(p.calls).toHaveLength(1);
     gate.resolve();
     await tick();
     // After it finished, a new one may start.
-    jobs.status();
+    jobs.status(OWNER);
     const again = deferred();
     const second = port(again);
     const next = new BackupJobs(second.backups, { waitMs: 0 });
-    expect(next.start()).toMatchObject({ state: 'running' });
+    expect(next.start(OWNER)).toMatchObject({ state: 'running' });
   });
 
   it('reports a failure as a code only, and passes the real error to the logger', async () => {
@@ -134,10 +136,10 @@ describe('BackupJobs', () => {
       },
     } satisfies BackupPort;
     const jobs = new BackupJobs(backups, { waitMs: 0, onError: (error) => seen.push(error) });
-    jobs.start();
+    jobs.start(OWNER);
     gate.resolve();
     await tick();
-    const status = jobs.status();
+    const status = jobs.status(OWNER);
     expect(status).toMatchObject({ state: 'error', error: 'not_found' });
     expect(JSON.stringify(status)).not.toContain('secret detail');
     expect(seen).toHaveLength(1);
@@ -153,10 +155,10 @@ describe('BackupJobs', () => {
       },
     } satisfies BackupPort;
     const jobs = new BackupJobs(backups, { waitMs: 0 });
-    jobs.start();
+    jobs.start(OWNER);
     gate.resolve();
     await tick();
-    expect(jobs.status()).toMatchObject({ state: 'error', error: 'internal_error' });
+    expect(jobs.status(OWNER)).toMatchObject({ state: 'error', error: 'internal_error' });
   });
 
   it('allows a new backup after a failed one', async () => {
@@ -171,11 +173,35 @@ describe('BackupJobs', () => {
       },
     } satisfies BackupPort;
     const jobs = new BackupJobs(backups, { waitMs: 0 });
-    jobs.start();
+    jobs.start(OWNER);
     await tick();
-    expect(jobs.status()).toMatchObject({ state: 'error' });
-    jobs.start();
+    expect(jobs.status(OWNER)).toMatchObject({ state: 'error' });
+    jobs.start(OWNER);
     await tick();
-    expect(jobs.status()).toMatchObject({ state: 'done', key: KEY });
+    expect(jobs.status(OWNER)).toMatchObject({ state: 'done', key: KEY });
+  });
+
+  it('never hands the key to another session and keeps it for the one that started the backup', async () => {
+    const gate = deferred();
+    const jobs = new BackupJobs(port(gate).backups, { waitMs: 0 });
+    jobs.start(OWNER);
+    gate.resolve();
+    await tick();
+    expect(jobs.status(OTHER)).toMatchObject({ state: 'done', key: null });
+    expect(jobs.status(OTHER)).toMatchObject({ state: 'done', key: null });
+    expect((jobs.status(OWNER) as { key: string | null }).key).toBe(KEY);
+    expect((jobs.status(OWNER) as { key: string | null }).key).toBeNull();
+  });
+
+  it('does not let another session discard an unclaimed key by starting a new backup', async () => {
+    const gate = deferred();
+    const jobs = new BackupJobs(port(gate).backups, { waitMs: 0 });
+    jobs.start(OWNER);
+    gate.resolve();
+    await tick();
+    expect(() => jobs.start(OTHER)).toThrow(BackupJobError);
+    expect((jobs.status(OWNER) as { key: string | null }).key).toBe(KEY);
+    // Once collected, anyone may start again.
+    expect(jobs.start(OTHER)).toMatchObject({ state: 'running' });
   });
 });

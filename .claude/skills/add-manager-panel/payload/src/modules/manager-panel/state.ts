@@ -33,6 +33,8 @@ export interface SetupRecord {
 export interface ThrottleRecord {
   failures: number;
   locked_until: string | null;
+  /** Start of the window the failures are counted in (absent in records written by older versions). */
+  window_start?: string;
 }
 
 const AUDIT_MAX_BYTES = 8 * 1024 * 1024;
@@ -112,6 +114,13 @@ export class PanelState {
     };
     this.writeJson('admin.json', record);
     return record;
+  }
+
+  /** Store a stronger hash of the same password: not a credential change, so sessions stay valid. */
+  replaceHash(hash: string, now: Date): void {
+    const previous = this.admin();
+    if (!previous) return;
+    this.writeJson('admin.json', { ...previous, password: hash, updated_at: now.toISOString() });
   }
 
   /** Revoke every session without changing the password. */
