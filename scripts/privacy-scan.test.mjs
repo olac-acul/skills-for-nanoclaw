@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { isAllowedEmail, scanIdentity, scanText } from './privacy-scan.mjs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { defaultDenyFile, isAllowedEmail, parseDenyList, scanHistoryContent, scanIdentity, scanText } from './privacy-scan.mjs';
 
 // Test values are assembled at runtime so this file itself stays clean.
 const ip = (...parts) => parts.join('.');
@@ -61,4 +66,65 @@ test('flags non-anonymous commit identities', () => {
   ]);
   assert.equal(found.length, 1);
   assert.equal(found[0].rule, 'commit-identity');
+});
+
+test('a deny list is read one pattern per line, ignores comments, and takes a broken pattern literally', () => {
+  const deny = parseDenyList(['# comment', '', 'Real-Name', 'a(b', 'x{2,'].join('\n'));
+  assert.equal(deny.length, 3);
+  assert.equal(scanText('written by REAL-NAME today', 'f', { deny }).length, 1);
+  assert.equal(scanText('the text a(b is odd', 'f', { deny })[0].rule, 'denied-term');
+  assert.deepEqual(scanText('nothing private here', 'f', { deny }), []);
+});
+
+test('a denied term is never echoed back, and the allow marker still skips a line', () => {
+  const deny = parseDenyList('secret-company-name');
+  const [found] = scanText('see secret-company-name for details', 'f', { deny });
+  assert.ok(!JSON.stringify(found).includes('secret-company-name'));
+  assert.deepEqual(scanText('see secret-company-name for details // privacy-scan: allow', 'f', { deny }), []);
+});
+
+test('identity scanning checks author and committer names against the deny list', () => {
+  const deny = parseDenyList('Real Person');
+  const commit = { sha: 'a'.repeat(40), authorEmail: mail('1+x', 'users.noreply.github.com'), committerEmail: mail('1+x', 'users.noreply.github.com'), authorName: 'Real Person', committerName: 'someone', message: 'fine' };
+  assert.equal(scanIdentity([commit], { deny }).length, 1);
+});
+
+test('history scan finds a secret that was added and later deleted, and reports it once', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ps-history-'));
+  try {
+    const run = (args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    run(['init', '-q', '-b', 'main']);
+    run(['config', 'user.email', mail('1+t', 'users.noreply.github.com')]);
+    run(['config', 'user.name', 'tester']);
+    const token = `ghp_${'a'.repeat(36)}`;
+    mkdirSync(join(dir, 'docs'));
+    writeFileSync(join(dir, 'docs', 'notes.md'), `token ${token}\nfine line\n`);
+    run(['add', '-A']);
+    run(['commit', '-q', '-m', 'add']);
+    writeFileSync(join(dir, 'docs', 'notes.md'), `token ${token} again\n`);
+    run(['commit', '-qam', 'touch']);
+    writeFileSync(join(dir, 'docs', 'notes.md'), 'clean now\n');
+    run(['commit', '-qam', 'remove']);
+    const found = scanHistoryContent({}, run);
+    assert.equal(found.length, 1);
+    assert.equal(found[0].rule, 'credential');
+    assert.match(found[0].label, /docs\/notes\.md/);
+    assert.match(found[0].description, /in 2 commits/);
+    assert.ok(!JSON.stringify(found).includes(token));
+    // File names are checked too.
+    writeFileSync(join(dir, 'about-real-person.txt'), 'x\n');
+    run(['add', '-A']);
+    run(['commit', '-q', '-m', 'name']);
+    const named = scanHistoryContent({ deny: parseDenyList('real-person') }, run);
+    assert.ok(named.some((f) => f.rule === 'path-denied-term'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the default deny list is the one named in the environment, or the per-user file, and only if it exists', () => {
+  assert.equal(defaultDenyFile({ PRIVACY_SCAN_DENY_LIST: '/some/list.txt' }, () => true), '/some/list.txt');
+  assert.equal(defaultDenyFile({ PRIVACY_SCAN_DENY_LIST: '/some/list.txt' }, () => false), null);
+  assert.match(defaultDenyFile({}, () => true), /\.config\/privacy-scan\/deny-list\.txt$/);
+  assert.equal(defaultDenyFile({}, () => false), null);
 });

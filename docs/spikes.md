@@ -133,5 +133,4 @@ breaks; the host keeps the session's claim and gateway lease and logs an error e
 panel's restart count is not affected (it reports the restart as done).
 
 It is an upstream issue and independent of these skills. Possible fix there: treat "already in
-progress" as success, or re-check with a short retry before throwing. Not reported upstream yet;
-that needs the repository owner's go-ahead.
+progress" as success, or re-check with a short retry before throwing. Not reported upstream yet.

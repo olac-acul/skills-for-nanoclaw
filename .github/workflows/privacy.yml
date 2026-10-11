@@ -2,9 +2,13 @@ name: privacy
 on:
   push:
   pull_request:
+# The token can only read the repository.
+permissions:
+  contents: read
 jobs:
   scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -13,4 +17,4 @@ jobs:
         with:
           node-version: 22
       - run: node --test "scripts/*.test.mjs"
-      - run: node scripts/privacy-scan.mjs --all --history
+      - run: node scripts/privacy-scan.mjs --all --history --history-content

@@ -12,13 +12,20 @@ on:
       ref:
         description: Upstream ref to test against
         default: main
+# The token can only read the repository.
+permissions:
+  contents: read
 jobs:
   compose:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: corepack enable
-      - run: node scripts/compose.mjs --ref "${{ github.event.inputs.ref || 'main' }}"
+      # The input goes through the environment, never into the shell command line.
+      - run: node scripts/compose.mjs --ref "$UPSTREAM_REF"
+        env:
+          UPSTREAM_REF: ${{ github.event.inputs.ref || 'main' }}
