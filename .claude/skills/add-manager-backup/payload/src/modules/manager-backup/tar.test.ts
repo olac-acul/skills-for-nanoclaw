@@ -10,7 +10,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   TarError,
   encodeEntryHeader,
+  MemberChecker,
+  defaultAllowSymlink,
   extractTar,
+  hasInnerParentSegment,
   packEntries,
   readTar,
   walkTree,
@@ -297,5 +300,112 @@ describe('reader strictness', () => {
     header.write('00000000100\0', 124, 'ascii');
     resetChecksum(header);
     await expect(rawEntries(Buffer.concat([header, Buffer.alloc(1536)]))).rejects.toMatchObject({ code: 'bad_header' });
+  });
+});
+
+describe('symlink policy', () => {
+  it('refuses a `..` that follows a name, so two links cannot be chained out of the root', async () => {
+    expect(defaultAllowSymlink('state/a', '.')).toBe(true);
+    expect(defaultAllowSymlink('state/b', 'a/..')).toBe(false); // resolves to the root lexically, to its parent once `a` is a link
+    expect(defaultAllowSymlink('state/d/e', '../sibling')).toBe(true);
+    expect(defaultAllowSymlink('state/d/e', '../../x')).toBe(false);
+    expect(defaultAllowSymlink('state/d/e', 'x/../y')).toBe(false);
+    expect(defaultAllowSymlink('state/d/e', '../../..')).toBe(false);
+    expect(hasInnerParentSegment('../../a/b')).toBe(false);
+    expect(hasInnerParentSegment('./../a')).toBe(false);
+    expect(hasInnerParentSegment('a/../b')).toBe(true);
+    expect(hasInnerParentSegment('a/..')).toBe(true);
+  });
+
+  it('rejects the `a -> .`, `b -> a/..` pair on extraction', async () => {
+    const dest = path.join(tmp, 'dest');
+    fs.mkdirSync(dest);
+    const items: PackItem[] = [
+      { meta: meta({ path: 'state', type: 'dir', mode: 0o755 }) },
+      { meta: meta({ path: 'state/a', type: 'symlink', linkpath: '.' }) },
+      { meta: meta({ path: 'state/b', type: 'symlink', linkpath: 'a/..' }) },
+    ];
+    await expect(
+      extractTar(chunked(await archiveOf(items), 512), dest, { policy: { topLevel: new Set(['state']) } }),
+    ).rejects.toMatchObject({ code: 'unsafe_symlink' });
+  });
+});
+
+describe('limits', () => {
+  const dir = (p: string): PackItem => ({ meta: meta({ path: p, type: 'dir', mode: 0o755 }) });
+
+  it('stops at a header that declares more content than allowed, before reading any of it', async () => {
+    const hostile = Buffer.concat([
+      await archiveOf([dir('state')]).then((buf) => buf.subarray(0, 512)),
+      encodeEntryHeader(meta({ path: 'state/big', size: 10 ** 13 })),
+    ]);
+    const dest = path.join(tmp, 'dest');
+    fs.mkdirSync(dest);
+    await expect(
+      extractTar(chunked(hostile, 512), dest, { policy, limits: { entries: 10, bytes: 1024 } }),
+    ).rejects.toMatchObject({ code: 'limit_exceeded' });
+    expect(fs.existsSync(path.join(dest, 'state', 'big'))).toBe(false);
+  });
+
+  it('stops when there are more entries than allowed', async () => {
+    const checker = new MemberChecker(policy);
+    checker.limits = { entries: 2, bytes: 100 };
+    checker.check(meta({ path: 'state', type: 'dir' }));
+    checker.check(meta({ path: 'state/a' }));
+    expect(() => checker.check(meta({ path: 'state/b' }))).toThrow(TarError);
+  });
+
+  it('refuses paths over 4096 bytes and names over 255 bytes', () => {
+    const checker = new MemberChecker(policy);
+    const longName = 'x'.repeat(256);
+    expect(() => checker.check(meta({ path: `state/${longName}`, type: 'dir' }))).toThrow(/too long/);
+    const deep = `state/${Array.from({ length: 50 }, () => 'y'.repeat(100)).join('/')}`;
+    expect(() => new MemberChecker(policy).check(meta({ path: deep, type: 'dir' }))).toThrow(/too long/);
+    expect(() =>
+      new MemberChecker(policy).check(meta({ path: `state/${'x'.repeat(255)}`, type: 'dir' })),
+    ).not.toThrow();
+  });
+
+  it('treats a backslash as an ordinary name character', () => {
+    expect(() => new MemberChecker(policy).check(meta({ path: 'state/we\\ird\\name', type: 'dir' }))).not.toThrow();
+  });
+});
+
+describe('end of archive', () => {
+  it('reads the whole source, accepting zero padding but nothing else after the end marker', async () => {
+    const archive = await archiveOf([{ meta: meta({ path: 'state', type: 'dir', mode: 0o755 }) }]);
+    const seen = async (buf: Buffer): Promise<number> => {
+      let count = 0;
+      for await (const entry of readTar(chunked(buf, 512))) {
+        void entry;
+        count++;
+      }
+      return count;
+    };
+    expect(await seen(Buffer.concat([archive, Buffer.alloc(8192)]))).toBe(1);
+    await expect(seen(Buffer.concat([archive, Buffer.alloc(100), Buffer.from('x')]))).rejects.toMatchObject({
+      code: 'trailing_data',
+    });
+  });
+});
+
+describe('walkTree with a refusal rule', () => {
+  it('leaves out what the rule refuses, reports it, and drops everything below a refused directory', async () => {
+    const root = path.join(tmp, 'tree');
+    fs.mkdirSync(path.join(root, 'bad', 'inner'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'bad', 'inner', 'f'), 'x');
+    fs.writeFileSync(path.join(root, 'good'), 'y');
+    fs.symlinkSync('/etc', path.join(root, 'escape'));
+    const skipped: string[] = [];
+    const paths: string[] = [];
+    for await (const item of walkTree({
+      root,
+      prefix: 'state',
+      refuse: (m) => (m.path === 'state/bad' || m.type === 'symlink' ? 'refused' : null),
+      onSkip: (p) => skipped.push(p),
+    }))
+      paths.push(item.meta.path);
+    expect(paths).toEqual(['state', 'state/good']);
+    expect(skipped.sort()).toEqual(['state/bad', 'state/escape']);
   });
 });

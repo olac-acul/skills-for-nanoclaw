@@ -18,6 +18,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { once } from 'node:events';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import zlib from 'node:zlib';
@@ -28,9 +29,12 @@ import { CryptoError, decryptStream, encryptStream } from './crypto.js';
 import type { BackupHost, DbDescription, InstalledInventory } from './host.js';
 import {
   MemberChecker,
+  hasInnerParentSegment,
+  memberPathProblem,
   packEntries,
   readTar,
   walkTree,
+  type ExtractLimits,
   type MemberPolicy,
   type PackItem,
   type TarEntryMeta,
@@ -41,11 +45,15 @@ export const TOOL_VERSION = '0.1.0';
 /** Scratch directory a restore keeps inside each root it replaces; never archived. */
 export const TXN_DIR = '.manager-backup-txn';
 export const TOP_LEVEL = new Set(['manifest.json', 'db', 'data', 'groups', 'store', 'env', 'config']);
-const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
+export const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
+/** Entries listed by name in the manifest when a backup leaves some out; the rest are only counted. */
+/** Free space kept back when checking whether a file fits. */
+const SPACE_MARGIN = 16 * 1024 * 1024;
+const MAX_SKIPPED_LISTED = 20;
 
 /** Files that identify this machine rather than the install; only backed up on request. */
 export const MACHINE_IDENTITY_FILES = ['device-key.json', 'account.json', 'host-id'];
-const CONFIG_FILES = ['mount-allowlist.json', 'sender-allowlist.json'];
+export const CONFIG_FILES = ['mount-allowlist.json', 'sender-allowlist.json'];
 
 export class BundleError extends Error {
   constructor(
@@ -54,6 +62,8 @@ export class BundleError extends Error {
       | 'unsupported_schema'
       | 'missing_member'
       | 'count_mismatch'
+      | 'limit_exceeded'
+      | 'insufficient_space'
       | 'database_check_failed'
       | 'source_unreadable',
     message: string,
@@ -157,6 +167,17 @@ export function snapshotSqliteFile(source: string, dest: string): void {
   } finally {
     db.close();
   }
+}
+
+/**
+ * Open a database that came out of a bundle. Its schema is attacker-controlled, so views and
+ * triggers may only call innocuous functions and every b-tree cell is bounds-checked.
+ */
+export function openUntrustedDb(file: string, options: { readonly?: boolean } = {}): Database.Database {
+  const db = new Database(file, options.readonly ? { readonly: true, fileMustExist: true } : { fileMustExist: true });
+  db.pragma('trusted_schema = OFF');
+  db.pragma('cell_size_check = ON');
+  return db;
 }
 
 // ---------------------------------------------------------------------------
@@ -267,13 +288,24 @@ export async function createBundle(options: CreateBundleOptions): Promise<Bundle
       ['groups', host.groupsDir, includeOutsideTxn, undefined],
       ['store', host.storeDir, includeOutsideTxn, undefined],
     ];
+    // Agents and containers write into these trees. Whatever a restore would refuse is left out
+    // and reported, so one odd entry cannot make every later backup unrestorable.
+    const skipped: string[] = [];
     for (const [prefix, dir, include, sub] of roots) {
       const real = await realDir(dir);
       if (!real) {
         items.push(dirItem(prefix));
         continue;
       }
-      for await (const item of walkTree({ root: real, prefix, include, substitute: sub })) items.push(item);
+      for await (const item of walkTree({
+        root: real,
+        prefix,
+        include,
+        substitute: sub,
+        refuse: restorePolicyProblem,
+        onSkip: (archivePath, reason) => skipped.push(`${archivePath} (${reason})`),
+      }))
+        items.push(item);
     }
 
     const env = readIfExists(host.envFile);
@@ -312,7 +344,14 @@ export async function createBundle(options: CreateBundleOptions): Promise<Bundle
       },
       identities: { machineIdentityIncluded },
       consistency: options.consistency ?? 'best-effort',
-      excluded: EXCLUDED_DESCRIPTION,
+      excluded: [
+        ...EXCLUDED_DESCRIPTION,
+        ...(skipped.length > 0
+          ? [
+              `${skipped.length} entries a restore would refuse: ${skipped.slice(0, MAX_SKIPPED_LISTED).join(', ')}${skipped.length > MAX_SKIPPED_LISTED ? ', ...' : ''}`,
+            ]
+          : []),
+      ],
     };
     const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
 
@@ -358,32 +397,96 @@ export async function createBundle(options: CreateBundleOptions): Promise<Bundle
 // Read
 // ---------------------------------------------------------------------------
 
-/** Decrypted, decompressed tar bytes of a bundle file. Errors surface while iterating. */
+/**
+ * Decrypted, decompressed tar bytes of a bundle file. Errors surface while iterating. When the
+ * consumer reads to the end, every ciphertext chunk has been authenticated, the last one included,
+ * even if the gzip stream finished before the file did.
+ */
 export function openBundleStream(file: string, key: Buffer): Readable {
-  const decrypted = Readable.from(decryptStream(fs.createReadStream(file), key));
+  return Readable.from(inflateAll(decryptStream(fs.createReadStream(file), key)));
+}
+
+async function* inflateAll(source: AsyncIterable<Buffer>): AsyncGenerator<Buffer> {
   const gunzip = zlib.createGunzip();
-  decrypted.on('error', (error) => gunzip.destroy(error));
-  gunzip.on('error', () => decrypted.destroy());
-  gunzip.on('close', () => decrypted.destroy());
-  return decrypted.pipe(gunzip);
+  let cancelled = false; // the consumer stopped early: stop reading the file
+  let closed = false; // gunzip is done (it ignores anything after its stream, which is still read and authenticated)
+  const closing = new Promise<void>((resolve) => {
+    gunzip.once('close', () => {
+      closed = true;
+      resolve();
+    });
+  });
+  const feeding = (async () => {
+    for await (const chunk of source) {
+      if (cancelled) break;
+      if (!closed && !gunzip.write(chunk)) await Promise.race([once(gunzip, 'drain'), closing]);
+    }
+    if (!cancelled && !closed) gunzip.end();
+  })();
+  feeding.catch((error: unknown) => gunzip.destroy(error as Error));
+  let completed = false;
+  try {
+    yield* gunzip;
+    await feeding; // the file was read to its end: every chunk and the final tag are checked
+    completed = true;
+  } finally {
+    if (!completed) cancelled = true;
+    gunzip.destroy();
+  }
+}
+
+/**
+ * Names the packer never emits. A hand-made `-wal` next to a session or central database would be
+ * applied by SQLite on first open, after the integrity check had looked at the main file only.
+ */
+function rejectMember(meta: TarEntryMeta): string | null {
+  const [top, ...rest] = meta.path.split('/');
+  const rel = rest.join('/');
+  if (
+    top === 'data' &&
+    (SESSION_DB_SIDECAR.test(rel) || (rest.length === 1 && /^v2\.db-(?:wal|shm|journal)$/.test(rel)))
+  )
+    return 'database sidecar file in a bundle';
+  if (top === 'db' && rest.length > 0 && (rel !== 'v2.db' || meta.type !== 'file'))
+    return 'unexpected member under db/';
+  return null;
 }
 
 export const BUNDLE_POLICY: MemberPolicy = {
   topLevel: TOP_LEVEL,
+  rejectMember,
   allowSymlink: (member, target) => {
     if (target === '' || target.includes('\0')) return false;
     const top = member.split('/')[0];
     // Agent workspaces hold things like Python virtual environments whose links point outside the
-    // tree (an interpreter in /usr/bin). They are recreated verbatim and never followed while
-    // restoring: the extractor refuses to write through any link, so a target cannot redirect a write.
+    // tree (an interpreter in /usr/bin). They are recreated verbatim and nothing in a restore follows
+    // them: the extractor refuses to write through any link, and the fix-ups that read the restored
+    // tree (restore.ts) use lstat and never enter groups/ or store/ through a link.
     if (top === 'groups' || top === 'store') return true;
+    // Only the data directory has legitimate links, and they stay inside it.
+    if (top !== 'data') return false;
     // Container skill links point at /app/skills/..., dangling on the host by design.
     if (target.startsWith('/app/') && !target.includes('..')) return true;
     if (target.startsWith('/')) return false;
+    if (hasInnerParentSegment(target)) return false;
     const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(member), target));
     return resolved === top || resolved.startsWith(`${top}/`);
   },
 };
+
+/** Why restore would refuse an entry (so a backup leaves it out), or null. */
+function restorePolicyProblem(meta: TarEntryMeta): string | null {
+  const problem = memberPathProblem(meta.path);
+  if (problem) return problem;
+  if (meta.type === 'symlink' && !BUNDLE_POLICY.allowSymlink!(meta.path, meta.linkpath ?? ''))
+    return 'link target outside the tree';
+  return BUNDLE_POLICY.rejectMember?.(meta) ?? null;
+}
+
+/** Caps for reading a bundle whose manifest is known: what it declares, plus the manifest member itself. */
+export function bundleLimits(manifest: BundleManifest): ExtractLimits {
+  return { entries: manifest.contents.entries, bytes: manifest.contents.bytes + MAX_MANIFEST_BYTES };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -424,7 +527,10 @@ export function parseManifest(raw: unknown): BundleManifest {
   );
   need(
     isRecord(raw.contents) &&
-      ['entries', 'files', 'bytes'].every((k) => Number.isInteger((raw.contents as Record<string, unknown>)[k])),
+      ['entries', 'files', 'bytes'].every((k) => {
+        const value = (raw.contents as Record<string, unknown>)[k];
+        return Number.isSafeInteger(value) && (value as number) >= 0;
+      }),
     'contents',
   );
   need(
@@ -477,13 +583,35 @@ export interface VerifyResult {
   manifest: BundleManifest;
   entries: number;
   files: number;
+  /** Regular-file content, manifest member excluded (equals `manifest.contents.bytes`). */
   bytes: number;
+  /** The same bytes per top-level member, to size the staging areas. */
+  byTop: Record<string, number>;
+}
+
+function parseManifestBytes(bytes: Buffer): BundleManifest {
+  try {
+    return parseManifest(JSON.parse(bytes.toString('utf8')));
+  } catch (error) {
+    if (error instanceof BundleError) throw error;
+    throw new BundleError('bad_manifest', 'manifest is not valid JSON');
+  }
+}
+
+/** Free bytes on the filesystem holding `dir`. */
+export async function freeBytes(dir: string): Promise<number> {
+  const stats = await fs.promises.statfs(dir);
+  return Number(stats.bavail) * Number(stats.bsize);
 }
 
 /**
  * Read the whole bundle: authenticate every byte, validate every member against
  * the policy, compare counts with the manifest and run an integrity check on
  * the database snapshots. Nothing is written outside a private temp directory.
+ *
+ * The manifest is read and validated first; from then on the headers are held to what it declares
+ * (entries, files, bytes), so a hostile size or entry count aborts the stream before anything is
+ * written, and the database snapshots written for the integrity check are bounded by free space.
  */
 export async function verifyBundle(file: string, key: Buffer): Promise<VerifyResult> {
   const work = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'manager-backup-verify-'));
@@ -493,6 +621,7 @@ export async function verifyBundle(file: string, key: Buffer): Promise<VerifyRes
     let entries = 0;
     let files = 0;
     let bytes = 0;
+    const byTop: Record<string, number> = {};
     let sawDb = false;
     const sqliteChecks: string[] = [];
 
@@ -500,19 +629,30 @@ export async function verifyBundle(file: string, key: Buffer): Promise<VerifyRes
       const meta: TarEntryMeta = entry.meta;
       checker.check(meta);
       entries++;
+      if (entries === 1) {
+        if (meta.path !== 'manifest.json' || meta.type !== 'file')
+          throw new BundleError('missing_member', 'bundle does not start with manifest.json');
+        files++;
+        manifest = parseManifestBytes(await readAll(entry.body, MAX_MANIFEST_BYTES));
+        checker.limits = { entries: manifest.contents.entries, bytes: manifest.contents.bytes + meta.size };
+        continue;
+      }
       if (meta.type === 'file') {
         files++;
         bytes += meta.size;
+        const top = meta.path.split('/')[0];
+        byTop[top] = (byTop[top] ?? 0) + meta.size;
       }
-      if (entries === 1) {
-        if (meta.path !== 'manifest.json')
-          throw new BundleError('missing_member', 'bundle does not start with manifest.json');
-        manifest = parseManifest(JSON.parse((await readAll(entry.body, MAX_MANIFEST_BYTES)).toString('utf8')));
-        continue;
-      }
+      if (manifest && (files > manifest.contents.files || bytes > manifest.contents.bytes))
+        throw new BundleError('limit_exceeded', 'the bundle holds more files or bytes than its manifest declares');
       const isDb =
         meta.type === 'file' && (meta.path === 'db/v2.db' || SESSION_DB.test(meta.path.replace(/^data\//, '')));
       if (isDb) {
+        if ((await freeBytes(work)) < meta.size + SPACE_MARGIN)
+          throw new BundleError(
+            'insufficient_space',
+            'not enough free space in the temp directory to check the databases',
+          );
         const target = path.join(work, `check-${sqliteChecks.length}.db`);
         const out = fs.createWriteStream(target, { mode: 0o600 });
         await pipeline(Readable.from(entry.body), out);
@@ -525,15 +665,19 @@ export async function verifyBundle(file: string, key: Buffer): Promise<VerifyRes
 
     if (!manifest) throw new BundleError('missing_member', 'bundle is empty');
     if (!sawDb) throw new BundleError('missing_member', 'bundle has no db/v2.db');
-    // The manifest counts itself; it was counted above as an entry and a file.
-    if (entries !== manifest.contents.entries || files !== manifest.contents.files) {
+    // The manifest counts itself as an entry and a file; its bytes are not in `contents.bytes`.
+    if (
+      entries !== manifest.contents.entries ||
+      files !== manifest.contents.files ||
+      bytes !== manifest.contents.bytes
+    ) {
       throw new BundleError(
         'count_mismatch',
-        `manifest lists ${manifest.contents.entries} entries / ${manifest.contents.files} files but the bundle has ${entries} / ${files}`,
+        `manifest lists ${manifest.contents.entries} entries / ${manifest.contents.files} files / ${manifest.contents.bytes} bytes but the bundle has ${entries} / ${files} / ${bytes}`,
       );
     }
     for (const target of sqliteChecks) {
-      const db = new Database(target, { readonly: true });
+      const db = openUntrustedDb(target, { readonly: true });
       try {
         const result = db.pragma('integrity_check', { simple: true });
         if (result !== 'ok')
@@ -545,7 +689,7 @@ export async function verifyBundle(file: string, key: Buffer): Promise<VerifyRes
         db.close();
       }
     }
-    return { manifest, entries, files, bytes };
+    return { manifest, entries, files, bytes, byTop };
   } finally {
     await fs.promises.rm(work, { recursive: true, force: true });
   }

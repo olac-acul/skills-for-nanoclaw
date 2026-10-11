@@ -220,6 +220,14 @@ export interface WalkOptions {
   /** Return false to leave an entry (and, for a directory, everything below it) out. */
   include?: (relativePath: string, stat: fs.Stats) => boolean;
   /**
+   * Last check on an entry before it is archived: return a reason to leave it out (the restore
+   * policy would refuse it) instead of producing an archive that cannot be restored. Applies to
+   * directories too, which drops everything below them.
+   */
+  refuse?: (meta: TarEntryMeta) => string | null;
+  /** Told about every entry `refuse` left out. */
+  onSkip?: (archivePath: string, reason: string) => void;
+  /**
    * Replace the content of a regular file, e.g. with a consistent snapshot of a
    * live SQLite database. Return null to archive the file as it is.
    */
@@ -248,14 +256,27 @@ export async function* walkTree(options: WalkOptions): AsyncGenerator<PackItem> 
       if (options.include && !options.include(rel, stat)) continue;
       const archivePath = `${base}/${rel}`;
       const common = { mode: stat.mode & 0o7777, uid: stat.uid, gid: stat.gid, mtime: Math.floor(stat.mtimeMs / 1000) };
+      const refused = (meta: TarEntryMeta): boolean => {
+        const reason = options.refuse?.(meta) ?? null;
+        if (reason) options.onSkip?.(meta.path, reason);
+        return reason !== null;
+      };
       if (stat.isSymbolicLink()) {
-        yield {
-          meta: { ...common, path: archivePath, type: 'symlink', size: 0, linkpath: await fs.promises.readlink(full) },
+        const meta: TarEntryMeta = {
+          ...common,
+          path: archivePath,
+          type: 'symlink',
+          size: 0,
+          linkpath: await fs.promises.readlink(full),
         };
+        if (!refused(meta)) yield { meta };
       } else if (stat.isDirectory()) {
-        yield { meta: { ...common, path: archivePath, type: 'dir', size: 0 } };
+        const meta: TarEntryMeta = { ...common, path: archivePath, type: 'dir', size: 0 };
+        if (refused(meta)) continue;
+        yield { meta };
         yield* visit(full, rel);
       } else if (stat.isFile()) {
+        if (refused({ ...common, path: archivePath, type: 'file', size: stat.size })) continue;
         const key = `${stat.dev}:${stat.ino}`;
         const first = stat.nlink > 1 ? seen.get(key) : undefined;
         if (first) {
@@ -351,6 +372,21 @@ class ByteReader {
     return out;
   }
 
+  /**
+   * Consume the rest of the input. Only zero bytes (the padding some writers add after the end
+   * marker) are accepted; reading to the end is what lets an authenticated source verify its final chunk.
+   */
+  async drainZeros(): Promise<void> {
+    for (;;) {
+      for (const chunk of this.chunks) if (chunk.some((byte) => byte !== 0)) throw trailing();
+      this.chunks = [];
+      this.buffered = 0;
+      if (this.done) return;
+      await this.fill(1);
+      if (this.buffered === 0 && this.done) return;
+    }
+  }
+
   /** Read up to `n` bytes without waiting for more than one chunk. */
   async readSome(n: number): Promise<Buffer> {
     if (this.buffered === 0) await this.fill(1);
@@ -363,6 +399,10 @@ class ByteReader {
     this.buffered -= take;
     return out;
   }
+}
+
+function trailing(): TarError {
+  return new TarError('trailing_data', 'unexpected data after the end of the archive');
 }
 
 function readString(buf: Buffer, offset: number, length: number): string {
@@ -492,10 +532,10 @@ export async function* readTar(source: AsyncIterable<Buffer>): AsyncGenerator<Ta
       for await (const chunk of iterator) void chunk;
     }
   }
-  if (!sawEnd) {
-    // Accept a stream that stops exactly at an entry boundary, nothing more.
-    return;
-  }
+  // Read the source to its end (nothing but zero padding may follow the end marker), so that an
+  // authenticated source has verified every chunk, its last one included, before the caller finishes.
+  await reader.drainZeros();
+  void sawEnd; // a stream that stops exactly at an entry boundary is accepted too
 }
 
 // ---------------------------------------------------------------------------
@@ -511,36 +551,81 @@ export interface MemberPolicy {
    * inside the same top-level member and are relative.
    */
   allowSymlink?: (memberPath: string, target: string) => boolean;
+  /** Return a reason to refuse a member the generic rules accept (names the writer never emits). */
+  rejectMember?: (meta: TarEntryMeta) => string | null;
+}
+
+export interface ExtractLimits {
+  /** Most entries (of any type) the archive may hold. */
+  entries: number;
+  /** Most bytes of regular-file content the archive may hold, summed over its headers. */
+  bytes: number;
+}
+
+/** Longest archive path and longest single name accepted (Linux PATH_MAX / NAME_MAX). */
+export const MAX_PATH_BYTES = 4096;
+export const MAX_NAME_BYTES = 255;
+
+/**
+ * A relative target may climb out of the link's directory only with a leading run of `..`. A `..`
+ * after a real name (`a/..`) resolves through whatever `a` is by then, and two links can be chained
+ * (`a -> .`, `b -> a/..`) to walk above the root with every link passing a purely lexical check.
+ */
+export function hasInnerParentSegment(target: string): boolean {
+  const segments = target.split('/');
+  let leading = true;
+  for (const segment of segments) {
+    if (segment === '..') {
+      if (!leading) return true;
+    } else if (segment !== '' && segment !== '.') leading = false;
+  }
+  return false;
 }
 
 export function defaultAllowSymlink(memberPath: string, target: string): boolean {
   if (target === '' || target.startsWith('/') || target.includes('\0')) return false;
+  if (hasInnerParentSegment(target)) return false;
   const dir = path.posix.dirname(memberPath);
   const resolved = path.posix.normalize(path.posix.join(dir, target));
   const top = memberPath.split('/')[0];
   return resolved === top || resolved.startsWith(`${top}/`);
 }
 
-function checkMemberPath(p: string): void {
-  if (p === '' || p.startsWith('/') || p.includes('\0') || p.includes('\\')) {
-    throw new TarError('unsafe_member', `unsafe member path ${JSON.stringify(p)}`);
-  }
+/** Why an archive path is refused, or null. Backslashes are ordinary name characters on POSIX hosts. */
+export function memberPathProblem(p: string): string | null {
+  if (p === '' || p.startsWith('/') || p.includes('\0')) return 'unsafe member path';
+  if (Buffer.byteLength(p) > MAX_PATH_BYTES) return 'member path too long';
   for (const segment of p.split('/')) {
-    if (segment === '' || segment === '.' || segment === '..') {
-      throw new TarError('unsafe_member', `unsafe member path ${JSON.stringify(p)}`);
-    }
+    if (segment === '' || segment === '.' || segment === '..') return 'unsafe member path';
+    if (Buffer.byteLength(segment) > MAX_NAME_BYTES) return 'member name too long';
   }
+  return null;
+}
+
+function checkMemberPath(p: string): void {
+  const problem = memberPathProblem(p);
+  if (problem) throw new TarError('unsafe_member', `${problem} ${JSON.stringify(p.slice(0, 200))}`);
 }
 
 /** Stateful per-archive checker: paths, duplicates, link rules. */
 export class MemberChecker {
   private readonly files = new Set<string>();
   private readonly all = new Set<string>();
+  private entries = 0;
+  private bytes = 0;
+  /** Caps on entries and content bytes; may be set once the manifest has been read. Checked from the headers, before any content is read. */
+  limits: ExtractLimits | null = null;
 
   constructor(private readonly policy: MemberPolicy) {}
 
   check(meta: TarEntryMeta): void {
+    this.entries++;
+    this.bytes += meta.size;
+    if (this.limits && (this.entries > this.limits.entries || this.bytes > this.limits.bytes))
+      throw new TarError('limit_exceeded', 'the archive holds more entries or bytes than its manifest declares');
     checkMemberPath(meta.path);
+    const refused = this.policy.rejectMember?.(meta);
+    if (refused) throw new TarError('unsafe_member', `${refused}: ${JSON.stringify(meta.path)}`);
     const top = meta.path.split('/')[0];
     if (!this.policy.topLevel.has(top))
       throw new TarError('unsafe_member', `unexpected top-level member ${JSON.stringify(top)}`);
@@ -577,6 +662,8 @@ export interface ExtractOptions {
   roots?: Record<string, string>;
   /** Apply owners from the archive. Needs root; otherwise ownership is left to the caller. */
   preserveOwner?: boolean;
+  /** Abort as soon as the headers exceed these caps. */
+  limits?: ExtractLimits;
   /** Called for every extracted entry (progress, auditing). */
   onEntry?: (meta: TarEntryMeta) => void;
 }
@@ -620,6 +707,7 @@ export async function extractTar(
   options: ExtractOptions,
 ): Promise<ExtractResult> {
   const checker = new MemberChecker(options.policy);
+  checker.limits = options.limits ?? null;
   const applyOwner = options.preserveOwner === true && typeof process.getuid === 'function' && process.getuid() === 0;
   const result: ExtractResult = { entries: 0, files: 0, bytes: 0, ownersApplied: applyOwner };
   const deferredDirs: TarEntryMeta[] = [];
