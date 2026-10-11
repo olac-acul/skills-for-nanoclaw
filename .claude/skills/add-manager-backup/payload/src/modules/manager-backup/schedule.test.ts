@@ -99,7 +99,7 @@ describe('renderUnits', () => {
   it('builds a oneshot service that runs the scheduled command and a persistent weekly timer', () => {
     const { service, timer } = renderUnits(input);
     expect(service).toContain('Type=oneshot');
-    expect(service).toContain('WorkingDirectory="/home/user/nanoclaw"');
+    expect(service).toContain('WorkingDirectory=/home/user/nanoclaw\n');
     expect(service).toContain(
       'ExecStart="/usr/local/bin/node" "/home/user/nanoclaw/node_modules/tsx/dist/cli.mjs" scripts/manager-backup.ts scheduled --keep 3',
     );
@@ -112,7 +112,7 @@ describe('renderUnits', () => {
 
   it('quotes paths so a space or a percent sign cannot change the command', () => {
     const { service } = renderUnits({ ...input, projectRoot: '/home/user/my install%h' });
-    expect(service).toContain('WorkingDirectory="/home/user/my install%%h"');
+    expect(service).toContain('WorkingDirectory=/home/user/my install%%h\n');
   });
 
   it('refuses a path with a line break', () => {

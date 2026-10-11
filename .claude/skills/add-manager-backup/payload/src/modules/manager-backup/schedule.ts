@@ -108,6 +108,12 @@ export interface UnitInput {
   settings: ScheduleSettings;
 }
 
+/** A path for `WorkingDirectory=`, which takes the rest of the line as is: quotes would become part of the path. */
+function bare(value: string): string {
+  if (/[\n\r\0]/.test(value)) throw new ScheduleError('invalid_setting', 'a path contains a control character');
+  return value.replace(/%/g, '%%');
+}
+
 function quote(value: string): string {
   if (/[\n\r\0]/.test(value)) throw new ScheduleError('invalid_setting', 'a path contains a control character');
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')}"`;
@@ -122,7 +128,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=${quote(input.projectRoot)}
+WorkingDirectory=${bare(input.projectRoot)}
 ExecStart=${quote(input.nodeBin)} ${quote(input.tsxCli)} scripts/manager-backup.ts scheduled --keep ${settings.keep}
 TimeoutStartSec=4h
 Nice=10
