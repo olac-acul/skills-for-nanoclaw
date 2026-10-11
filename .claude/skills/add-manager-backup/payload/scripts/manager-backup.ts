@@ -326,6 +326,14 @@ async function main(): Promise<void> {
       console.log(
         `This machine had none, so the backup's value was used for: ${result.adoptedEnvKeys.map(printable).join(', ')}`,
       );
+    if (result.configReplaced.length)
+      console.log(
+        `Replaced machine settings files in ~/.config/nanoclaw with the backup's (the previous ones are in the rollback copy): ${result.configReplaced.map(printable).join(', ')}`,
+      );
+    if (result.configSkipped.length)
+      console.log(
+        `Left alone, because a restore does not write them: ${result.configSkipped.map(printable).join(', ')}`,
+      );
     if (result.droppedEnvKeys.length)
       console.log(`Rehearsal dropped these .env keys: ${result.droppedEnvKeys.map(printable).join(', ')}`);
     if (!result.upgradeMarkerPreserved)
