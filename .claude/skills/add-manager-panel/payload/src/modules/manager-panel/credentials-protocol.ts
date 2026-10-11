@@ -48,10 +48,25 @@ export function stripAnsi(text: string): string {
   return text.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '');
 }
 
+/** The sign-in page must be on OpenAI's own domains; anything else printed by the container is refused. */
+export function isTrustedLoginUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+    // eslint-disable-next-line no-catch-all/no-catch-all -- an unparsable URL is simply not trusted
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.port) return false;
+  const host = url.hostname.toLowerCase();
+  return ['openai.com', 'chatgpt.com'].some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
 /** The pairing page and code that `opencode auth login` prints for a headless sign-in. */
 export function parseDeviceOutput(text: string): { url: string; code: string } | null {
   const clean = stripAnsi(text);
   const url = /Go to:\s*(https:\/\/[^\s]+)/.exec(clean)?.[1];
+  if (url && !isTrustedLoginUrl(url)) return null;
   const code = /Enter code:\s*([A-Za-z0-9-]{4,32})/.exec(clean)?.[1];
   return url && code ? { url, code } : null;
 }
@@ -67,14 +82,17 @@ function secrets(listJson: string): SecretListEntry[] {
   return Array.isArray(parsed.data) ? parsed.data : [];
 }
 
+/** Only the secret this panel manages: of type anthropic, or named exactly "Anthropic". */
 function isAnthropic(entry: SecretListEntry): boolean {
-  return entry.type === 'anthropic' || /anthropic/i.test(entry.name ?? '');
+  return entry.type === 'anthropic' || entry.name === 'Anthropic';
 }
 
 /** Output of `onecli secrets list`: is an Anthropic credential stored, and under which id? */
-export function findAnthropicSecret(listJson: string): { id: string | null } | null {
+export function findAnthropicSecret(listJson: string): { id: string | null; name: string | null } | null {
   const found = secrets(listJson).find(isAnthropic);
-  return found ? { id: typeof found.id === 'string' ? found.id : null } : null;
+  return found
+    ? { id: typeof found.id === 'string' ? found.id : null, name: typeof found.name === 'string' ? found.name : null }
+    : null;
 }
 
 /** The credentials the panel can remove. */
@@ -124,7 +142,7 @@ export function parseEvents(stdout: string): ScriptEvent[] {
       event.type === 'prompt' &&
       typeof event.url === 'string' &&
       typeof event.code === 'string' &&
-      event.url.startsWith('https://')
+      isTrustedLoginUrl(event.url)
     ) {
       events.push({ type: 'prompt', url: event.url, code: event.code });
     } else if (event.type === 'done') {

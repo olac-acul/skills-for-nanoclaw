@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { CredentialError, createCredentialsPort, type SpawnScript } from './credentials.js';
+import { CredentialError, createCredentialsPort, sweepStaleLogins, type SpawnScript } from './credentials.js';
 import { encodeEvent, type ScriptEvent } from './credentials-protocol.js';
 
 /** A stand-in for the child process: records what is written to stdin and lets the test script its output. */
@@ -162,11 +162,11 @@ describe('ChatGPT sign-in', () => {
     expect(credentials.loginState()).toEqual({ state: 'idle' });
     expect(credentials.startChatgptLogin()).toEqual({ state: 'waiting' });
     expect(children[0].command).toBe('chatgpt-login');
-    children[0].child.say({ type: 'prompt', url: 'https://auth.example.test/device', code: 'AB-12' });
+    children[0].child.say({ type: 'prompt', url: 'https://auth.openai.com/device', code: 'AB-12' });
     await tick();
     expect(credentials.loginState()).toEqual({
       state: 'waiting',
-      url: 'https://auth.example.test/device',
+      url: 'https://auth.openai.com/device',
       code: 'AB-12',
     });
     expect(credentials.startChatgptLogin()).toMatchObject({ state: 'waiting', code: 'AB-12' }); // does not start a second one
@@ -208,5 +208,74 @@ describe('without the OpenCode and OneCLI skills', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('sweepStaleLogins', () => {
+  it('removes only old login directories and containers of dead helpers, by exact name', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sweep-test-'));
+    try {
+      const old = new Date(Date.now() - 60 * 60 * 1000);
+      const make = (name: string, aged: boolean) => {
+        const dir = path.join(tmp, name);
+        fs.mkdirSync(path.join(dir, 'data'), { recursive: true });
+        if (aged) fs.utimesSync(dir, old, old);
+      };
+      make('manager-chatgpt-login-abc123', true); // stale
+      make('manager-chatgpt-login-def456', false); // recent: a login may be running
+      make('manager-chatgpt-login-abc123-extra', true); // not the exact pattern
+      make('other-abc123', true);
+      const removed: string[] = [];
+      sweepStaleLogins({
+        tmpDir: tmp,
+        now: Date.now(),
+        listContainers: () => [
+          'manager-chatgpt-login-111',
+          'manager-chatgpt-login-222',
+          'unrelated-333',
+          'manager-chatgpt-login-x',
+        ],
+        removeContainer: (name) => removed.push(name),
+        isProcessAlive: (pid) => pid === 222,
+      });
+      expect(fs.readdirSync(tmp).sort()).toEqual([
+        'manager-chatgpt-login-abc123-extra',
+        'manager-chatgpt-login-def456',
+        'other-abc123',
+      ]);
+      expect(removed).toEqual(['manager-chatgpt-login-111']);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+  it('never throws, and the port runs the sweep once, on first use', async () => {
+    expect(() =>
+      sweepStaleLogins({
+        tmpDir: '/nonexistent.test',
+        now: 0,
+        listContainers: () => {
+          throw new Error('no runtime');
+        },
+        removeContainer: () => undefined,
+        isProcessAlive: () => false,
+      }),
+    ).not.toThrow();
+    let sweeps = 0;
+    const credentials = port({
+      sweep: () => {
+        sweeps += 1;
+        throw new Error('boom');
+      },
+    });
+    const first = credentials.status();
+    children[0].child.say({ type: 'status', claude: true, openaiKey: false, chatgptLogin: false });
+    children[0].child.exit();
+    await first;
+    clock += 10_000;
+    const second = credentials.status();
+    children[1].child.say({ type: 'status', claude: true, openaiKey: false, chatgptLogin: false });
+    children[1].child.exit();
+    await second;
+    expect(sweeps).toBe(1);
   });
 });

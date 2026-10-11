@@ -45,25 +45,65 @@ function blockedRanges(): net.BlockList {
   list.addAddress('::', 'ipv6');
   list.addSubnet('fe80::', 10, 'ipv6');
   list.addSubnet('ff00::', 8, 'ipv6');
+  // Cloud metadata services that sit inside ranges that are otherwise fine for a local model server.
+  list.addAddress('100.100.100.200', 'ipv4'); // Alibaba Cloud, inside the tailnet range
+  list.addAddress('fd00:ec2::254', 'ipv6'); // AWS, inside the unique-local range
+  // Special-purpose ranges that are neither local nor a hosted provider.
+  list.addSubnet('192.0.0.0', 24, 'ipv4'); // IETF protocol assignments, includes the Oracle metadata address
+  list.addSubnet('198.18.0.0', 15, 'ipv4'); // benchmarking
+  list.addSubnet('fec0::', 10, 'ipv6'); // deprecated site-local
+  list.addSubnet('2001::', 32, 'ipv6'); // Teredo
+  list.addSubnet('64:ff9b:1::', 48, 'ipv6'); // local-use NAT64
   return list;
 }
 
 export type AddressClass = 'blocked' | 'local' | 'public';
 
-/** Unwrap `::ffff:a.b.c.d` so IPv4-mapped addresses are judged as IPv4. */
-function unmap(address: string): { address: string; family: 'ipv4' | 'ipv6' } {
-  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(address);
-  if (mapped) return { address: mapped[1], family: 'ipv4' };
-  return { address, family: net.isIPv6(address) ? 'ipv6' : 'ipv4' };
+/** The eight 16-bit groups of an IPv6 literal, or null when it is not one. */
+function ipv6Groups(address: string): number[] | null {
+  let text = address.split('%')[0].toLowerCase();
+  const dotted = /^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/.exec(text);
+  if (dotted) {
+    const octets = dotted[2].split('.').map(Number);
+    if (octets.some((octet) => octet > 255)) return null;
+    text = `${dotted[1]}${((octets[0] << 8) | octets[1]).toString(16)}:${((octets[2] << 8) | octets[3]).toString(16)}`;
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const parse = (part: string): number[] => (part === '' ? [] : part.split(':').map((group) => parseInt(group, 16)));
+  const head = parse(halves[0]);
+  const tail = halves.length === 2 ? parse(halves[1]) : [];
+  const fill = 8 - head.length - tail.length;
+  if (halves.length === 2 ? fill < 1 : fill !== 0) return null;
+  const groups = [...head, ...new Array<number>(halves.length === 2 ? fill : 0).fill(0), ...tail];
+  return groups.every((group) => Number.isInteger(group) && group >= 0 && group <= 0xffff) ? groups : null;
 }
+
+const v4 = (high: number, low: number): string => [high >> 8, high & 255, low >> 8, low & 255].join('.');
 
 export function classifyAddress(
   raw: string,
   ranges = { blocked: blockedRanges(), local: localRanges() },
 ): AddressClass {
-  const { address, family } = unmap(raw);
-  if (ranges.blocked.check(address, family)) return 'blocked';
-  return ranges.local.check(address, family) ? 'local' : 'public';
+  const groups = net.isIPv6(raw) ? ipv6Groups(raw) : null;
+  if (groups) {
+    // IPv4-mapped (::ffff:a.b.c.d, however it is spelled): judged as the IPv4 address it carries.
+    if (groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff) {
+      return classifyAddress(v4(groups[6], groups[7]), ranges);
+    }
+    // NAT64 (64:ff9b::/96) and 6to4 (2002::/16) carry an IPv4 destination; a blocked one stays blocked.
+    // Otherwise the address is public: reaching it goes through a gateway, so only HTTPS is accepted.
+    const embedded =
+      groups[0] === 0x64 && groups[1] === 0xff9b && groups.slice(2, 6).every((group) => group === 0)
+        ? v4(groups[6], groups[7])
+        : groups[0] === 0x2002
+          ? v4(groups[1], groups[2])
+          : null;
+    if (embedded !== null) return classifyAddress(embedded, ranges) === 'blocked' ? 'blocked' : 'public';
+  }
+  const family = net.isIPv6(raw) ? 'ipv6' : 'ipv4';
+  if (ranges.blocked.check(raw, family)) return 'blocked';
+  return ranges.local.check(raw, family) ? 'local' : 'public';
 }
 
 export type ProbeRequest = (
@@ -81,6 +121,9 @@ export interface EndpointDeps {
 export type EndpointCheck =
   | { ok: true; url: URL; address: string; family: number; local: boolean }
   | { ok: false; reason: 'endpoint_invalid' | 'endpoint_not_allowed' | 'endpoint_insecure' | 'endpoint_unresolvable' };
+
+/** What a model id may look like; anything else from a remote `/models` list is dropped, not shown. */
+export const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/;
 
 const MAX_BODY = 256 * 1024;
 
@@ -235,7 +278,9 @@ export async function probeEndpoint(
   const data = (listed.body as { data?: unknown } | null)?.data;
   if (listed.status !== 200 || !Array.isArray(data)) return { ...base, reason: 'endpoint_invalid_response' };
   const entries = data
-    .filter((item): item is { id: string; max_model_len?: unknown } => typeof item?.id === 'string')
+    .filter(
+      (item): item is { id: string; max_model_len?: unknown } => typeof item?.id === 'string' && MODEL_ID.test(item.id),
+    )
     .slice(0, 200);
   const models = entries.map((item) => item.id);
   if (model === null) return { ...base, reason: null, models };

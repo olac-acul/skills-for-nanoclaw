@@ -42,8 +42,54 @@ describe('classifyAddress', () => {
     ['::', 'blocked'],
     ['::ffff:' + ip(169, 254, 169, 254), 'blocked'],
     ['::ffff:' + ip(127, 0, 0, 1), 'local'],
+    ['::ffff:7f00:1', 'local'], // the form `new URL` produces
+    ['::ffff:a9fe:a9fe', 'blocked'],
+    // Metadata services inside the tailnet and unique-local ranges, which otherwise stay local.
+    [ip(100, 100, 100, 200), 'blocked'],
+    [ip(100, 100, 100, 201), 'local'],
+    ['fd00:ec2::254', 'blocked'],
+    ['FD00:EC2:0:0:0:0:0:254', 'blocked'],
+    ['fd00:ec2::255', 'local'],
+    // NAT64 and 6to4 carry an IPv4 destination: a blocked one stays blocked, the rest needs HTTPS.
+    ['64:ff9b::a9fe:a9fe', 'blocked'],
+    ['64:ff9b::169.254.169.254', 'blocked'],
+    ['64:ff9b::808:808', 'public'],
+    ['64:ff9b::7f00:1', 'public'],
+    ['64:ff9b:1::1', 'blocked'],
+    ['2002:a9fe:a9fe::1', 'blocked'],
+    ['2002:808:808::1', 'public'],
+    // Other special-purpose ranges.
+    ['2001:0:4136:e378:8000:63bf:3fff:fdd2', 'blocked'],
+    [ip(192, 0, 0, 192), 'blocked'],
+    [ip(198, 18, 0, 1), 'blocked'],
+    [ip(198, 19, 255, 255), 'blocked'],
+    [ip(198, 20, 0, 1), 'public'],
+    ['fec0::1', 'blocked'],
   ])('%s is %s', (address, expected) => {
     expect(classifyAddress(address)).toBe(expected);
+  });
+});
+
+describe('endpoint addresses written as IPv6 literals', () => {
+  it('refuses a NAT64 metadata address and allows a bracketed local one', async () => {
+    expect(await checkEndpoint('https://[64:ff9b::a9fe:a9fe]/v1', deps({}))).toEqual({
+      ok: false,
+      reason: 'endpoint_not_allowed',
+    });
+    expect(await checkEndpoint('http://[fd12:3456::1]:8000/v1', deps({}))).toMatchObject({ ok: true, local: true });
+  });
+});
+
+describe('probeEndpoint model list', () => {
+  it('drops ids that do not look like model ids and caps their length', async () => {
+    const request: ProbeRequest = async () => ({
+      status: 200,
+      body: {
+        data: [{ id: 'good-model' }, { id: '<script>alert(1)</script>' }, { id: 'a'.repeat(5000) }, { id: 'bad id' }],
+      },
+    });
+    const result = await probeEndpoint('https://api.test/v1', null, deps({ 'api.test': [ip(8, 8, 4, 4)] }, request));
+    expect(result.models).toEqual(['good-model']);
   });
 });
 

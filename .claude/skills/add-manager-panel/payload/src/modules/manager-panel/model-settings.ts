@@ -11,7 +11,9 @@
  * API keys are not handled here: they belong in the credential gateway. A
  * keyless endpoint, or one whose key is already stored there, works as is.
  */
-import type { ProbeResult } from './model-endpoint.js';
+import { log } from '../../log.js';
+import { canRestoreValue } from './env-file.js';
+import { MODEL_ID, type ProbeResult } from './model-endpoint.js';
 
 export const MANAGED_ENV_KEYS = [
   'OPENCODE_PROVIDER',
@@ -65,7 +67,8 @@ export interface CredentialPresence {
 export interface ModelPorts {
   credentials(): Promise<CredentialPresence>;
   readEnv(keys: readonly string[]): Record<string, string | null>;
-  updateEnv(changes: Record<string, string | null>): Record<string, string | null>;
+  /** `restore` puts back values that were read from the file, which may not pass the check for new ones. */
+  updateEnv(changes: Record<string, string | null>, options?: { restore?: boolean }): Record<string, string | null>;
   listGroups(): Promise<GroupModel[]>;
   setGroup(id: string, value: { provider: string | null; model: string | null }): Promise<void>;
   restartGroup(id: string): Promise<void>;
@@ -82,7 +85,41 @@ export interface ModelInput {
   smallModel?: string;
 }
 
-const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/;
+/**
+ * Only one change (or recovery) runs at a time. The flag is set before the first await, so two
+ * concurrent requests cannot both pass the check; the second one fails at once.
+ */
+let changing = false;
+async function exclusive<T>(run: () => Promise<T>): Promise<T> {
+  if (changing) throw new ModelSettingsError('change_in_progress', 'another model change is running');
+  changing = true;
+  try {
+    return await run();
+  } finally {
+    changing = false;
+  }
+}
+
+/** The raw message stays in the host log; the browser only gets a stable code. */
+function failedChange(error: unknown, rolledBack: boolean): ModelSettingsError {
+  log.error('Model change failed', { err: error, rolledBack });
+  return new ModelSettingsError(
+    rolledBack ? 'apply_failed_rolled_back' : 'apply_failed_rollback_incomplete',
+    rolledBack
+      ? 'the change failed and the previous settings were restored'
+      : 'the change failed and restoring the previous settings did not finish',
+    rolledBack ? 'apply_error' : 'rollback_incomplete',
+  );
+}
+
+/** Refuse to start when a value now in `.env` could not be put back afterwards. */
+function snapshotEnv(ports: ModelPorts): Record<string, string | null> {
+  const env = ports.readEnv(MANAGED_ENV_KEYS);
+  if (Object.values(env).some((value) => !canRestoreValue(value))) {
+    throw new ModelSettingsError('invalid_input', 'a current setting cannot be restored safely', 'env_not_restorable');
+  }
+  return env;
+}
 
 function normalise(input: ModelInput): { baseUrl: string; model: string; smallModel: string } {
   const baseUrl = input.baseUrl.trim().replace(/\/+$/, '');
@@ -187,7 +224,11 @@ function targetEnv(
   };
 }
 
-export async function applyModelChange(ports: ModelPorts, input: ModelInput): Promise<ApplyOutcome> {
+export function applyModelChange(ports: ModelPorts, input: ModelInput): Promise<ApplyOutcome> {
+  return exclusive(() => applyModelChangeLocked(ports, input));
+}
+
+async function applyModelChangeLocked(ports: ModelPorts, input: ModelInput): Promise<ApplyOutcome> {
   const settings = normalise(input);
   if (ports.readJournal()) {
     throw new ModelSettingsError('change_in_progress', 'a previous model change was interrupted; recover it first');
@@ -201,7 +242,7 @@ export async function applyModelChange(ports: ModelPorts, input: ModelInput): Pr
   const groups = await ports.listGroups();
   const journal: Journal = {
     startedAt: (ports.now?.() ?? new Date()).toISOString(),
-    env: ports.readEnv(MANAGED_ENV_KEYS),
+    env: snapshotEnv(ports),
     groups,
   };
   ports.writeJournal(journal);
@@ -234,14 +275,7 @@ export async function applyModelChange(ports: ModelPorts, input: ModelInput): Pr
     ports.clearJournal();
     return { groups: groups.length, restarted: groups.length - restartFailures.length, restartFailures };
   } catch (error) {
-    const rolledBack = await rollbackFromJournal(ports, journal);
-    throw new ModelSettingsError(
-      rolledBack ? 'apply_failed_rolled_back' : 'apply_failed_rollback_incomplete',
-      rolledBack
-        ? 'the change failed and the previous settings were restored'
-        : 'the change failed and restoring the previous settings did not finish',
-      error instanceof Error ? error.message : String(error),
-    );
+    throw failedChange(error, await rollbackFromJournal(ports, journal));
   }
 }
 
@@ -249,20 +283,32 @@ export async function applyModelChange(ports: ModelPorts, input: ModelInput): Pr
 async function rollbackFromJournal(ports: ModelPorts, journal: Journal): Promise<boolean> {
   let complete = true;
   try {
-    ports.updateEnv(journal.env);
+    // A journal file is data on disk: only the managed keys are written, and only string or null values.
+    const env: Record<string, string | null> = {};
+    for (const key of MANAGED_ENV_KEYS) {
+      const value = (journal.env as Record<string, unknown> | null)?.[key];
+      if (typeof value === 'string' || value === null) env[key] = value;
+    }
+    ports.updateEnv(env, { restore: true });
     // eslint-disable-next-line no-catch-all/no-catch-all -- a failed rollback step is recorded so the journal is kept
-  } catch {
+  } catch (error) {
+    log.error('Model rollback could not restore .env', { err: error });
     complete = false;
   }
-  for (const group of journal.groups) {
+  for (const group of Array.isArray(journal.groups) ? journal.groups : []) {
+    if (typeof group?.id !== 'string') continue;
     try {
-      await ports.setGroup(group.id, { provider: group.provider, model: group.model });
+      await ports.setGroup(group.id, {
+        provider: typeof group.provider === 'string' ? group.provider : null,
+        model: typeof group.model === 'string' ? group.model : null,
+      });
       // eslint-disable-next-line no-catch-all/no-catch-all -- a failed rollback step is recorded so the journal is kept
     } catch {
       complete = false;
     }
   }
-  for (const group of journal.groups) {
+  for (const group of Array.isArray(journal.groups) ? journal.groups : []) {
+    if (typeof group?.id !== 'string') continue;
     try {
       await ports.restartGroup(group.id);
       // eslint-disable-next-line no-catch-all/no-catch-all -- a group that cannot restart now starts on the restored settings next time
@@ -275,10 +321,12 @@ async function rollbackFromJournal(ports: ModelPorts, journal: Journal): Promise
 }
 
 /** Called at host start: an interrupted change is rolled back. */
-export async function recoverModelChange(ports: ModelPorts): Promise<'none' | 'rolled-back' | 'incomplete'> {
-  const journal = ports.readJournal();
-  if (!journal) return 'none';
-  return (await rollbackFromJournal(ports, journal)) ? 'rolled-back' : 'incomplete';
+export function recoverModelChange(ports: ModelPorts): Promise<'none' | 'rolled-back' | 'incomplete'> {
+  return exclusive(async () => {
+    const journal = ports.readJournal();
+    if (!journal) return 'none';
+    return (await rollbackFromJournal(ports, journal)) ? 'rolled-back' : 'incomplete';
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -369,8 +417,12 @@ function groupValueFor(input: ProviderInput): { provider: string | null; model: 
 }
 
 /** Point every agent at the chosen provider. Same journal and rollback as an endpoint change. */
-export async function applyProviderChange(ports: ModelPorts, input: ProviderInput): Promise<ApplyOutcome> {
+export function applyProviderChange(ports: ModelPorts, input: ProviderInput): Promise<ApplyOutcome> {
   if (input.kind === 'compatible') return applyModelChange(ports, input);
+  return exclusive(() => applyProviderChangeLocked(ports, input));
+}
+
+async function applyProviderChangeLocked(ports: ModelPorts, input: ProviderInput): Promise<ApplyOutcome> {
   if (ports.readJournal()) {
     throw new ModelSettingsError('change_in_progress', 'a previous model change was interrupted; recover it first');
   }
@@ -383,7 +435,7 @@ export async function applyProviderChange(ports: ModelPorts, input: ProviderInpu
   const groups = await ports.listGroups();
   const journal: Journal = {
     startedAt: (ports.now?.() ?? new Date()).toISOString(),
-    env: ports.readEnv(MANAGED_ENV_KEYS),
+    env: snapshotEnv(ports),
     groups,
   };
   ports.writeJournal(journal);
@@ -410,14 +462,7 @@ export async function applyProviderChange(ports: ModelPorts, input: ProviderInpu
     ports.clearJournal();
     return { groups: groups.length, restarted: groups.length - restartFailures.length, restartFailures };
   } catch (error) {
-    const rolledBack = await rollbackFromJournal(ports, journal);
-    throw new ModelSettingsError(
-      rolledBack ? 'apply_failed_rolled_back' : 'apply_failed_rollback_incomplete',
-      rolledBack
-        ? 'the change failed and the previous settings were restored'
-        : 'the change failed and restoring the previous settings did not finish',
-      error instanceof Error ? error.message : String(error),
-    );
+    throw failedChange(error, await rollbackFromJournal(ports, journal));
   }
 }
 

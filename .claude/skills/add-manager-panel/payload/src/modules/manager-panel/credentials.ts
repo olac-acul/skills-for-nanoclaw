@@ -4,10 +4,12 @@
  * credentials-protocol.ts); this file starts it, feeds it a secret on stdin and turns its events
  * into results. A secret is held in memory only for the length of one call.
  */
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
+import { CONTAINER_RUNTIME_BIN } from '../../container-runtime.js';
 import { parseEvents, type CredentialKind, type ScriptErrorCode, type ScriptEvent } from './credentials-protocol.js';
 
 export interface CredentialStatus {
@@ -42,6 +44,84 @@ export interface CredentialsPort {
   cancelChatgptLogin(): void;
 }
 
+const LOGIN_PREFIX = 'manager-chatgpt-login-';
+/** The login helper gives up after 15 minutes; anything older than this is left over from a crash. */
+const STALE_LOGIN_MS = 20 * 60 * 1000;
+
+export interface SweepDeps {
+  tmpDir: string;
+  now: number;
+  listContainers(): string[];
+  removeContainer(name: string): void;
+  isProcessAlive(pid: number): boolean;
+}
+
+/**
+ * Remove what a killed login helper left behind: its 0700 directory (it may hold OAuth tokens) and its
+ * container. Matches only the exact names the helper creates, never throws.
+ */
+export function sweepStaleLogins(deps: SweepDeps): void {
+  try {
+    for (const entry of fs.readdirSync(deps.tmpDir)) {
+      if (!/^manager-chatgpt-login-[A-Za-z0-9]{6}$/.test(entry)) continue;
+      try {
+        const dir = path.join(deps.tmpDir, entry);
+        const stat = fs.lstatSync(dir);
+        const mine = typeof process.getuid !== 'function' || stat.uid === process.getuid();
+        if (stat.isDirectory() && mine && deps.now - stat.mtimeMs > STALE_LOGIN_MS) {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+        // eslint-disable-next-line no-catch-all/no-catch-all -- cleanup is best effort
+      } catch {
+        // Best effort: the next sweep tries again.
+      }
+    }
+    // eslint-disable-next-line no-catch-all/no-catch-all -- cleanup is best effort
+  } catch {
+    // No temp directory to read.
+  }
+  try {
+    for (const name of deps.listContainers()) {
+      const match = /^manager-chatgpt-login-(\d{1,10})$/.exec(name);
+      if (match && !deps.isProcessAlive(Number(match[1]))) deps.removeContainer(name);
+    }
+    // eslint-disable-next-line no-catch-all/no-catch-all -- cleanup is best effort
+  } catch {
+    // No container runtime, or it is not running.
+  }
+}
+
+function liveSweepDeps(): SweepDeps {
+  return {
+    tmpDir: os.tmpdir(),
+    now: Date.now(),
+    listContainers: () => {
+      const result = spawnSync(
+        CONTAINER_RUNTIME_BIN,
+        ['ps', '-a', '--filter', `name=${LOGIN_PREFIX}`, '--format', '{{.Names}}'],
+        {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          timeout: 10_000,
+        },
+      );
+      return result.status === 0 ? result.stdout.split('\n').map((line) => line.trim()) : [];
+    },
+    removeContainer: (name) => {
+      spawnSync(CONTAINER_RUNTIME_BIN, ['rm', '-f', name], { stdio: 'ignore', timeout: 30_000 });
+    },
+    isProcessAlive: (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+        // eslint-disable-next-line no-catch-all/no-catch-all -- ESRCH means gone, EPERM means alive; anything else counts as gone
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === 'EPERM';
+      }
+    },
+  };
+}
+
 export type SpawnScript = (command: string, argument?: string) => ChildProcess;
 
 export interface CredentialsOptions {
@@ -51,6 +131,8 @@ export interface CredentialsOptions {
   statusTtlMs?: number;
   callTimeoutMs?: number;
   now?: () => number;
+  /** Clean up after a login helper that was killed; defaults to the real sweep unless `spawnScript` is replaced. */
+  sweep?: () => void;
 }
 
 export function createCredentialsPort(options: CredentialsOptions): CredentialsPort {
@@ -68,6 +150,19 @@ export function createCredentialsPort(options: CredentialsOptions): CredentialsP
           stdio: ['pipe', 'pipe', 'ignore'],
         },
       ));
+
+  let swept = false;
+  const sweepOnce = (): void => {
+    if (swept) return;
+    swept = true;
+    const sweep = options.sweep ?? (options.spawnScript ? undefined : () => sweepStaleLogins(liveSweepDeps()));
+    try {
+      sweep?.();
+      // eslint-disable-next-line no-catch-all/no-catch-all -- cleanup must never break the caller
+    } catch {
+      // Ignored.
+    }
+  };
 
   let cached: { at: number; value: CredentialStatus } | null = null;
   let login: { child: ChildProcess; state: LoginState } | null = null;
@@ -128,6 +223,7 @@ export function createCredentialsPort(options: CredentialsOptions): CredentialsP
   return {
     async status() {
       requireScript();
+      sweepOnce();
       if (cached && now() - cached.at < statusTtlMs) return cached.value;
       const events = await run('status');
       const status = events.find((event) => event.type === 'status');
@@ -146,6 +242,7 @@ export function createCredentialsPort(options: CredentialsOptions): CredentialsP
     },
     startChatgptLogin() {
       requireScript();
+      sweepOnce();
       if (login && login.state.state === 'waiting') return login.state;
       const child = start('chatgpt-login');
       const entry = { child, state: { state: 'waiting' } as LoginState };
