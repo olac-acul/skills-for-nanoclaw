@@ -41,10 +41,15 @@ test('does not mistake file names for LAN hostnames', () => {
 
 test('flags personal emails and accepts anonymous ones', () => {
   assert.equal(scanText(`contact ${mail('someone', 'gmail.com')}`, 'f')[0].rule, 'email');
-  for (const ok of [mail('1+user', 'users.noreply.github.com'), mail('a', 'example.com'), mail('a', 'host.test'), 'noreply@anthropic.com']) {
+  for (const ok of [mail('1+user', 'users.noreply.github.com'), mail('a', 'example.com'), mail('a', 'host.test'), 'noreply@anthropic.com', 'ws@8.21.3', '@types/ws@8.18.1']) {
     assert.equal(isAllowedEmail(ok), true, ok);
     assert.deepEqual(scanText(ok, 'f'), []);
   }
+});
+
+test('a version number after the at sign is a pinned dependency, not an address', () => {
+  assert.deepEqual(scanText('ws@8.21.3', 'f'), []);
+  assert.equal(scanText(`x ${mail('someone', 'gmail.com')} and ws@8.21.3`, 'f').length, 1);
 });
 
 test('flags credentials and redacts them in the report', () => {

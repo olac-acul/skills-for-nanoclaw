@@ -35,6 +35,8 @@ const ALLOWED_EMAIL = [
   /@example\.(com|org|net)$/i,
   /@[a-z0-9.-]*\.test$/i,
   /^noreply@anthropic\.com$/i,
+  // `package@1.2.3`, a pinned dependency: an address cannot end in a number.
+  /@\d+(\.\d+)+$/,
 ];
 
 export const RULES = [

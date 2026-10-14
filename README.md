@@ -3,16 +3,18 @@
 > **Unofficial** add-on skills for [NanoClaw](https://github.com/nanocoai/nanoclaw).
 > Not affiliated with, endorsed by, or maintained by the upstream project.
 
-Skills that add two things to a clean upstream NanoClaw install, without forking it and without editing any
-upstream source file: an installation is upstream plus the skills it has installed, and it updates with
-upstream's own `/update-nanoclaw`.
+Skills that add to a clean upstream NanoClaw install without forking it: an installation is upstream plus the
+skills it has installed, and it updates with upstream's own `/update-nanoclaw`. The manager skills edit no
+upstream source file beyond one import line. `add-voice` also makes two small changes to core files, listed in
+its own documentation, applied as exact anchored edits that stop and change nothing if upstream moves that code.
 
 | Skill | What it adds |
 | --- | --- |
 | [`add-manager-panel`](.claude/skills/add-manager-panel/SKILL.md) | A web panel for the main settings: overview, agents, the model provider for all agents (an OpenAI-compatible endpoint such as Ollama, ChatGPT with a subscription login or an API key, or Claude), provider credentials stored in the credential gateway, backups, and a built-in guide. |
 | [`add-manager-backup`](.claude/skills/add-manager-backup/SKILL.md) | Encrypted, verified backups and restores from the terminal (and from the panel): a restore with a way back if it fails, a rehearsal mode that never activates channel accounts, and weekly scheduled backups with a retention count. |
+| [`add-voice`](.claude/skills/add-voice/SKILL.md) | A voice channel for the NanoVoice Android app: a token-protected WebSocket that streams the agent's replies to the phone and lets the agent run phone actions (timers, alarms, calendar changes with approval on the phone, music, notes, photos), with a setup script that enables it, wires it to an agent and shows what to enter in the app. |
 
-Install `add-manager-backup` first; the panel builds on it.
+Install `add-manager-backup` first; the panel builds on it. `add-voice` stands alone.
 
 ## Guide
 
@@ -23,7 +25,7 @@ reference. The panel serves the same text at `/guide`.
 ## Install
 
 The skills follow upstream's skill format (`SKILL.md` with `nc:` blocks, `REMOVE.md`, files under `payload/`).
-Copy the two folders from `.claude/skills/` into the same folder of your NanoClaw checkout, then, in Claude
+Copy the folders you want from `.claude/skills/` into the same folder of your NanoClaw checkout, then, in Claude
 Code started in that checkout, run `/add-manager-backup` and then `/add-manager-panel`. Each skill checks that
 the NanoClaw version has what it needs, copies its files, builds and runs its own tests, and tells you what is
 left to do. Credentials are never asked for in chat: the panel and the terminal tools take them with hidden
