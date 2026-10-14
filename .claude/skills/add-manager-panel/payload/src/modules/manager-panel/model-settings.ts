@@ -23,7 +23,30 @@ export const MANAGED_ENV_KEYS = [
   'OPENCODE_AUTH_MODE',
   'OPENCODE_MODEL_CONTEXT_LIMIT',
   'OPENCODE_MODEL_OUTPUT_LIMIT',
+  'OPENCODE_MODEL_INPUT_MODALITIES',
 ] as const;
+
+export const INPUT_MODALITIES_KEY = 'OPENCODE_MODEL_INPUT_MODALITIES';
+
+/** Whether the setting (a comma list such as `image` or `image,pdf`) names images. */
+export function imagesEnabled(value: string | null | undefined): boolean {
+  return (value ?? '').split(',').some((entry) => entry.trim().toLowerCase() === 'image');
+}
+
+/**
+ * The setting with `image` added or taken out. Other entries (audio, video, pdf) stay as they were, in order;
+ * `text` is dropped because it is always on. Null when nothing is left, which removes the key from `.env`.
+ */
+export function withImages(value: string | null | undefined, enabled: boolean): string | null {
+  const kept = (value ?? '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(
+      (entry, index, all) => entry !== '' && entry !== 'text' && entry !== 'image' && all.indexOf(entry) === index,
+    );
+  const list = enabled ? [...kept, 'image'] : kept;
+  return list.length > 0 ? list.join(',') : null;
+}
 
 export const JOURNAL_NAME = 'model-journal.json';
 
@@ -83,6 +106,8 @@ export interface ModelInput {
   baseUrl: string;
   model: string;
   smallModel?: string;
+  /** The model accepts images (photos from the phone app). Left as it is when absent. */
+  images?: boolean;
 }
 
 /**
@@ -139,6 +164,8 @@ export interface ModelStatus {
   smallModel: string | null;
   provider: string | null;
   authMode: string | null;
+  /** The install tells the model it can receive images. */
+  images: boolean;
   groups: Array<{ id: string; provider: string | null; model: string | null; followsSettings: boolean }>;
   /** A change was interrupted and has not been recovered yet. */
   interrupted: boolean;
@@ -154,6 +181,7 @@ export async function readModelStatus(ports: ModelPorts): Promise<ModelStatus> {
     smallModel: env.OPENCODE_SMALL_MODEL,
     provider: env.OPENCODE_PROVIDER,
     authMode: env.OPENCODE_AUTH_MODE,
+    images: imagesEnabled(env[INPUT_MODALITIES_KEY]),
     groups: groups.map((group) => ({
       ...group,
       followsSettings: group.provider === 'opencode' && (!expected || group.model === expected),
@@ -224,6 +252,17 @@ function targetEnv(
   };
 }
 
+/** Add the image choice to a set of `.env` changes, built on the setting as it was; no choice, no change. */
+function withImagesChoice(
+  env: Record<string, string | null>,
+  before: Record<string, string | null>,
+  images: boolean | undefined,
+): Record<string, string | null> {
+  return images === undefined
+    ? env
+    : { ...env, [INPUT_MODALITIES_KEY]: withImages(before[INPUT_MODALITIES_KEY], images) };
+}
+
 export function applyModelChange(ports: ModelPorts, input: ModelInput): Promise<ApplyOutcome> {
   return exclusive(() => applyModelChangeLocked(ports, input));
 }
@@ -248,7 +287,7 @@ async function applyModelChangeLocked(ports: ModelPorts, input: ModelInput): Pro
   ports.writeJournal(journal);
 
   try {
-    ports.updateEnv(targetEnv(settings, probe));
+    ports.updateEnv(withImagesChoice(targetEnv(settings, probe), journal.env, input.images));
     for (const group of groups)
       await ports.setGroup(group.id, { provider: 'opencode', model: `openai/${settings.model}` });
 
@@ -334,8 +373,8 @@ export function recoverModelChange(ports: ModelPorts): Promise<'none' | 'rolled-
 // ---------------------------------------------------------------------------
 
 export type ProviderInput =
-  | { kind: 'compatible'; baseUrl: string; model: string; smallModel?: string }
-  | { kind: 'chatgpt'; auth: 'subscription' | 'api-key'; model: string; smallModel?: string }
+  | { kind: 'compatible'; baseUrl: string; model: string; smallModel?: string; images?: boolean }
+  | { kind: 'chatgpt'; auth: 'subscription' | 'api-key'; model: string; smallModel?: string; images?: boolean }
   | { kind: 'claude'; model?: string };
 
 export type ProviderKind = ProviderInput['kind'];
@@ -352,6 +391,8 @@ export interface ProviderPreview {
   models: string[];
   contextLimit: number | null;
   local: boolean | null;
+  /** What the endpoint says about image input; null when it does not say. */
+  imageSupport: boolean | null;
   smallModel: SmallModelCheck | 'not_checked';
   credential: 'present' | 'missing' | 'not_needed';
   groupsAffected: number;
@@ -373,6 +414,7 @@ export async function previewProviderChange(ports: ModelPorts, input: ProviderIn
       models: preview.probe.models,
       contextLimit: preview.probe.contextLimit,
       local: preview.probe.local, // privacy-scan: allow -- property name
+      imageSupport: preview.probe.imageSupport ?? null,
       smallModel: preview.smallModel,
     };
   }
@@ -389,6 +431,7 @@ export async function previewProviderChange(ports: ModelPorts, input: ProviderIn
     models: [],
     contextLimit: null,
     local: null,
+    imageSupport: null,
     smallModel: 'not_checked',
   };
 }
@@ -440,7 +483,8 @@ async function applyProviderChangeLocked(ports: ModelPorts, input: ProviderInput
   };
   ports.writeJournal(journal);
   try {
-    if (Object.keys(env).length > 0) ports.updateEnv(env);
+    const changes = input.kind === 'claude' ? env : withImagesChoice(env, journal.env, input.images);
+    if (Object.keys(changes).length > 0) ports.updateEnv(changes);
     for (const group of groups) await ports.setGroup(group.id, target);
 
     const after = await ports.listGroups();

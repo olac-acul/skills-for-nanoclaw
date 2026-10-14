@@ -40,6 +40,12 @@ describe('the served browser script', () => {
     expect(APP_JS).toContain("'data-label': label");
   });
 
+  it('offers the image choice for an endpoint and for ChatGPT, and sends it', () => {
+    expect(APP_JS).toContain('imagesDetected');
+    expect(APP_JS.match(/images: images\.checked/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(APP_JS).toContain('m.images === true');
+  });
+
   it('lets a phone save the page to its home screen', () => {
     expect(INDEX_HTML).toContain('rel="manifest" href="/manifest.webmanifest"');
     expect(INDEX_HTML).toContain('rel="apple-touch-icon"');

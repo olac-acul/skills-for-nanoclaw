@@ -230,6 +230,42 @@ export interface ProbeResult {
   contextLimit: number | null;
   /** True when the endpoint is on this host or its LAN/VPN. */
   local: boolean;
+  /**
+   * Whether the endpoint says the model accepts images: true or false when it says so, null or absent when it
+   * does not (most OpenAI-compatible servers do not). Never guessed from the model's name.
+   */
+  imageSupport?: boolean | null;
+}
+
+/**
+ * What a `/models` entry says about image input. Servers describe it in different ways: OpenRouter lists
+ * `architecture.input_modalities`, others give `input_modalities` or `modalities`, a `capabilities` list that names
+ * `vision`, or a flag `supports_vision`. Returns null when the entry says nothing about it.
+ */
+export function detectImageSupport(entry: unknown): boolean | null {
+  if (typeof entry !== 'object' || entry === null) return null;
+  const item = entry as Record<string, unknown>;
+  const lists: unknown[] = [
+    (item.architecture as { input_modalities?: unknown } | undefined)?.input_modalities,
+    item.input_modalities,
+    item.modalities,
+    (item.modalities as { input?: unknown } | undefined)?.input,
+  ];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    const names = list
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.toLowerCase());
+    if (names.length > 0) return names.includes('image');
+  }
+  if (Array.isArray(item.capabilities)) {
+    const names = item.capabilities
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.toLowerCase());
+    if (names.some((name) => name === 'vision' || name === 'image' || name === 'images')) return true;
+  }
+  if (typeof item.supports_vision === 'boolean') return item.supports_vision;
+  return null;
 }
 
 function failure(error: unknown): string {
@@ -263,7 +299,12 @@ export async function probeEndpoint(
 ): Promise<ProbeResult> {
   const checked = await checkEndpoint(raw, deps);
   if (!checked.ok) return { reason: checked.reason, models: [], contextLimit: null, local: false };
-  const base = { models: [] as string[], contextLimit: null as number | null, local: checked.local }; // privacy-scan: allow -- property name or synthetic test input
+  const base = {
+    models: [] as string[],
+    contextLimit: null as number | null,
+    local: checked.local, // privacy-scan: allow -- property name or synthetic test input
+    imageSupport: null as boolean | null,
+  };
   let listed: { status: number; body: unknown };
   try {
     listed = await deps.request(join(checked.url, '/models'), checked.address, checked.family, {
@@ -289,6 +330,7 @@ export async function probeEndpoint(
   if (!entry) return { ...base, reason: 'model_not_found', models };
   const window = entry.max_model_len;
   const contextLimit = typeof window === 'number' && Number.isSafeInteger(window) && window > 0 ? window : null;
+  base.imageSupport = detectImageSupport(entry);
   try {
     const answer = await deps.request(join(checked.url, '/chat/completions'), checked.address, checked.family, {
       method: 'POST',

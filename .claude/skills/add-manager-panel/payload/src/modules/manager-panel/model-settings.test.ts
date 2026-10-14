@@ -5,7 +5,9 @@ import {
   ModelSettingsError,
   applyProviderChange,
   detectProvider,
+  imagesEnabled,
   previewProviderChange,
+  withImages,
   applyModelChange,
   outputLimitFor,
   previewModelChange,
@@ -105,6 +107,70 @@ describe('previewModelChange', () => {
     await expect(previewModelChange(ports, { ...input, model: 'bad id; rm' })).rejects.toMatchObject({
       code: 'invalid_input',
     });
+  });
+});
+
+describe('the image setting', () => {
+  it('reads and edits the modality list, keeping the other entries', () => {
+    expect(imagesEnabled(undefined)).toBe(false);
+    expect(imagesEnabled('pdf')).toBe(false);
+    expect(imagesEnabled(' Image , pdf')).toBe(true);
+    expect(withImages(null, true)).toBe('image');
+    expect(withImages(null, false)).toBeNull();
+    expect(withImages('image', false)).toBeNull();
+    expect(withImages('pdf,image,audio', false)).toBe('pdf,audio');
+    expect(withImages('pdf', true)).toBe('pdf,image');
+    expect(withImages('image,image,text', true)).toBe('image');
+  });
+});
+
+describe('applyModelChange and images', () => {
+  const input = { baseUrl: 'http://models.test:8000/v1', model: 'm1' };
+
+  it('turns images on, and a later change with the box ticked off removes the key', async () => {
+    await applyModelChange(ports, { ...input, images: true });
+    expect(ports.env.OPENCODE_MODEL_INPUT_MODALITIES).toBe('image');
+    ports.probeResult = { ...GOOD, models: ['m1', 'm2'] };
+    await applyModelChange(ports, { ...input, model: 'm2', images: false });
+    expect(ports.env.OPENCODE_MODEL_INPUT_MODALITIES).toBeUndefined();
+  });
+
+  it('leaves the setting alone when no choice is sent, and keeps other modalities when one is', async () => {
+    ports.env.OPENCODE_MODEL_INPUT_MODALITIES = 'image,pdf';
+    await applyModelChange(ports, input);
+    expect(ports.env.OPENCODE_MODEL_INPUT_MODALITIES).toBe('image,pdf');
+    await applyModelChange(ports, { ...input, images: false });
+    expect(ports.env.OPENCODE_MODEL_INPUT_MODALITIES).toBe('pdf');
+  });
+
+  it('puts the previous setting back when the change fails', async () => {
+    ports.env.OPENCODE_MODEL_INPUT_MODALITIES = 'pdf';
+    ports.failOn.setGroup = 'g2';
+    await expect(applyModelChange(ports, { ...input, images: true })).rejects.toMatchObject({
+      code: 'apply_failed_rolled_back',
+    });
+    expect(ports.env.OPENCODE_MODEL_INPUT_MODALITIES).toBe('pdf');
+  });
+
+  it('reports in the status whether images are on', async () => {
+    expect((await readModelStatus(ports)).images).toBe(false);
+    ports.env.OPENCODE_MODEL_INPUT_MODALITIES = 'image';
+    expect((await readModelStatus(ports)).images).toBe(true);
+  });
+
+  it('applies the choice for ChatGPT too, and never for Claude', async () => {
+    ports.creds = { claude: true, openaiKey: true, chatgptLogin: false };
+    await applyProviderChange(ports, { kind: 'chatgpt', auth: 'api-key', model: 'gpt-x', images: true });
+    expect(ports.env.OPENCODE_MODEL_INPUT_MODALITIES).toBe('image');
+    await applyProviderChange(ports, { kind: 'claude' });
+    expect(ports.env.OPENCODE_MODEL_INPUT_MODALITIES).toBe('image');
+  });
+
+  it('passes on what the endpoint says about images in the preview', async () => {
+    ports.probeResult = { ...GOOD, imageSupport: true };
+    expect((await previewProviderChange(ports, { kind: 'compatible', ...input })).imageSupport).toBe(true);
+    ports.probeResult = GOOD;
+    expect((await previewProviderChange(ports, { kind: 'compatible', ...input })).imageSupport).toBeNull();
   });
 });
 

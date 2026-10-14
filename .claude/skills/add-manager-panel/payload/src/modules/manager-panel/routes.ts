@@ -97,23 +97,31 @@ async function loadAgent(ctx: RouteContext, given: string) {
 
 /** The body of the model preflight and apply calls: an endpoint (the default), ChatGPT or Claude. */
 export function parseProviderBody(raw: unknown): ProviderInput {
-  const body = fields<{ kind?: string; auth?: string; baseUrl?: string; model?: string; smallModel?: string }>(raw, {
+  const body = fields<{
+    kind?: string;
+    auth?: string;
+    baseUrl?: string;
+    model?: string;
+    smallModel?: string;
+    images?: boolean;
+  }>(raw, {
     kind: { type: 'string', max: 20, optional: true },
     auth: { type: 'string', max: 20, optional: true },
     baseUrl: { type: 'string', max: 2048, optional: true },
     model: { type: 'string', max: 200, optional: true },
     smallModel: { type: 'string', max: 200, optional: true },
+    images: { type: 'boolean', optional: true },
   });
   const kind = body.kind ?? 'compatible';
   if (kind === 'compatible') {
     if (!body.baseUrl) throw new InvalidBody('baseUrl');
     if (!body.model) throw new InvalidBody('model');
-    return { kind, baseUrl: body.baseUrl, model: body.model, smallModel: body.smallModel };
+    return { kind, baseUrl: body.baseUrl, model: body.model, smallModel: body.smallModel, images: body.images };
   }
   if (kind === 'chatgpt') {
     if (body.auth !== 'subscription' && body.auth !== 'api-key') throw new InvalidBody('auth');
     if (!body.model) throw new InvalidBody('model');
-    return { kind, auth: body.auth, model: body.model, smallModel: body.smallModel };
+    return { kind, auth: body.auth, model: body.model, smallModel: body.smallModel, images: body.images };
   }
   if (kind === 'claude') return { kind, model: body.model };
   throw new InvalidBody('kind');
@@ -343,6 +351,7 @@ export function buildRoutes(): Route[] {
           base_url: status.baseUrl,
           model: status.model,
           small_model: status.smallModel,
+          images: status.images,
           interrupted: status.interrupted,
           groups: status.groups.map((g) => ({
             id: publicId(key, 'agent', g.id),
@@ -375,6 +384,7 @@ export function buildRoutes(): Route[] {
           small_model: preview.smallModel,
           models: preview.models,
           context_limit: preview.contextLimit,
+          image_support: preview.imageSupport,
           local: preview.local, // privacy-scan: allow -- property name
           agents_affected: preview.groupsAffected,
           restarts_needed: preview.restartsNeeded,

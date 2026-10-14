@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   checkEndpoint,
   classifyAddress,
+  detectImageSupport,
   probeEndpoint,
   type EndpointDeps,
   type ProbeRequest,
@@ -180,6 +181,40 @@ describe('probeEndpoint', () => {
       reason: null,
       contextLimit: null,
     });
+  });
+
+  it('reads what the endpoint says about image input, and says nothing when it does not', async () => {
+    const request = answers({
+      '/v1/models': {
+        status: 200,
+        body: {
+          data: [
+            { id: 'plain' },
+            { id: 'router', architecture: { input_modalities: ['text', 'image'] } },
+            { id: 'texty', architecture: { input_modalities: ['text'] } },
+            { id: 'caps', capabilities: ['completion', 'vision'] },
+            { id: 'flag', supports_vision: false },
+          ],
+        },
+      },
+      '/v1/chat/completions': { status: 200, body: { choices: [{}] } },
+    });
+    const probe = (model: string) => probeEndpoint('http://models.test/v1', model, deps(table, request));
+    expect((await probe('plain')).imageSupport).toBeNull();
+    expect((await probe('router')).imageSupport).toBe(true);
+    expect((await probe('texty')).imageSupport).toBe(false);
+    expect((await probe('caps')).imageSupport).toBe(true);
+    expect((await probe('flag')).imageSupport).toBe(false);
+  });
+
+  it('detects image input from the shapes servers use and ignores anything it does not understand', () => {
+    expect(detectImageSupport({ id: 'x', input_modalities: ['Text', 'IMAGE'] })).toBe(true);
+    expect(detectImageSupport({ id: 'x', modalities: { input: ['text'] } })).toBe(false);
+    expect(detectImageSupport({ id: 'x', modalities: ['text', 'image'] })).toBe(true);
+    expect(detectImageSupport({ id: 'x', capabilities: ['tools'] })).toBeNull();
+    expect(detectImageSupport({ id: 'x', architecture: { input_modalities: 'image' } })).toBeNull();
+    expect(detectImageSupport(null)).toBeNull();
+    expect(detectImageSupport('vision')).toBeNull();
   });
 
   it('waits longer for the first answer of a model on this machine, which has to load into memory', async () => {

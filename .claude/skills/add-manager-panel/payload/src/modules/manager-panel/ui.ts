@@ -278,6 +278,8 @@ var T = {
   },
   model: {
     title: 'Model and provider', current: 'Current settings', baseUrl: 'Endpoint (OpenAI-compatible, ending in /v1)', model: 'Model', small: 'Small model (optional)', moreAbout: 'More', smallHelp: 'A lighter model OpenCode can use for minor background work. Leave it empty to use the main model for everything, which is right when you run a single model.',
+    images: 'The model understands images', imagesHelp: 'Photos sent from the phone app reach the model only when this is on. Turn it off for a model that cannot see images, which would otherwise answer without the photo.',
+    imagesDetected: 'The endpoint says this model accepts images.', imagesNone: 'The endpoint says this model does not accept images.', imagesUnknown: 'The endpoint does not say whether the model accepts images: tick it if you know it does.',
     check: 'Check endpoint', apply: 'Apply to all agents', follows: 'Uses the install settings', differs: 'Different from the install settings',
     keyNote: 'API keys are not entered here. An endpoint that needs one gets its key through a terminal.', keyHelp: 'How to store a key', applyHelp: 'What applying does', errorsHelp: 'Endpoint errors explained',
     checked: 'Endpoint checked.', applied: 'Applied.', affected: 'Agents that will be restarted', context: 'Context window', models: 'Models offered',
@@ -445,7 +447,7 @@ function viewAgents() {
 function viewModel() {
   var out = h('div'); var box = h('div', { class: 'card' }, T.loading); var chooser = h('div', { class: 'card' }); var panel = h('div');
   show(h('div', {}, h('h1', {}, T.model.title), out, box, chooser, panel));
-  var info = { kind: 'unknown', auth: null, bridge: null };
+  var info = { kind: 'unknown', auth: null, bridge: null, images: false };
   var creds = null; // null: not offered (OpenCode / OneCLI skills missing) or not loaded
   var choice = 'compatible';
 
@@ -469,7 +471,7 @@ function viewModel() {
 
   function loadStatus() {
     return api('GET', '/model').then(function (m) {
-      info = { kind: m.kind, auth: m.auth, bridge: m.bridge_address };
+      info = { kind: m.kind, auth: m.auth, bridge: m.bridge_address, images: m.images === true };
       clear(box);
       if (m.interrupted) box.appendChild(message('error', T.model.interrupted));
       box.appendChild(h('h2', {}, T.model.current));
@@ -569,8 +571,10 @@ function viewModel() {
     var model = h('input', { required: true, list: 'models', autocomplete: 'off', spellcheck: 'false' });
     var small = h('input', { autocomplete: 'off', spellcheck: 'false' });
     var list = h('datalist', { id: 'models' }); var result = h('div'); var checked = false;
+    var images = h('input', { type: 'checkbox' }); var imagesNote = h('p', { class: 'hint' }, T.model.imagesHelp); var imagesTouched = false;
+    images.checked = info.kind === 'compatible' && info.images; images.onchange = function () { imagesTouched = true; };
     var checkBtn = h('button', { type: 'button' }, T.model.check); var applyBtn = h('button', { class: 'primary', type: 'button', disabled: true }, T.model.apply);
-    function body() { return strip({ kind: 'compatible', baseUrl: url.value.trim(), model: model.value.trim(), smallModel: small.value.trim() }); }
+    function body() { return strip({ kind: 'compatible', baseUrl: url.value.trim(), model: model.value.trim(), smallModel: small.value.trim(), images: images.checked }); }
     function invalidate() { checked = false; applyBtn.disabled = true; }
     fillFrom(url, model, small);
     var ollama = h('button', { type: 'button', onclick: function () { url.value = 'http://' + (info.bridge || 'localhost') + ':11434/v1'; model.value = ''; invalidate(); clear(result); checkBtn.click(); } }, T.provider.use_ollama);
@@ -582,6 +586,10 @@ function viewModel() {
         if (!model.value.trim()) { result.appendChild(message('ok', T.provider.models_found + ': ' + (p.models.map(function (id) { return String(id).slice(0, 200); }).join(', ') || '-'))); return; }
         if (!p.ok) return result.appendChild(message('error', (T.errors[p.reason] || p.reason) + ''));
         checked = true; applyBtn.disabled = false;
+        if (p.image_support === true || p.image_support === false) {
+          if (!imagesTouched) images.checked = p.image_support;
+          clear(imagesNote); imagesNote.appendChild(document.createTextNode(p.image_support ? T.model.imagesDetected : T.model.imagesNone));
+        } else { clear(imagesNote); imagesNote.appendChild(document.createTextNode(T.model.imagesUnknown)); }
         result.appendChild(message('ok', T.model.checked + ' ' + T.model.affected + ': ' + p.restarts_needed + (p.context_limit ? '. ' + T.model.context + ': ' + p.context_limit : '') + '.'));
       }).catch(function (err) { fail(result, err); });
     };
@@ -594,6 +602,7 @@ function viewModel() {
     return h('form', { onsubmit: function (ev) { ev.preventDefault(); } },
       h('label', {}, T.model.baseUrl, url), h('div', { class: 'row' }, ollama, h('span', { class: 'hint' }, T.provider.ollama_hint, ' ', guide('ollama', T.model.moreAbout))),
       h('label', {}, T.model.model, model, list), h('label', {}, T.model.small, small), h('p', { class: 'hint' }, T.model.smallHelp, ' ', guide('the-small-model', T.model.moreAbout)),
+      h('label', { class: 'row' }, images, T.model.images), imagesNote,
       h('p', { class: 'muted' }, T.model.keyNote, ' ', guide('api-keys', T.model.keyHelp)), result, h('div', { class: 'row' }, checkBtn, applyBtn));
   }
   function fillFrom(url, model, small) {
@@ -608,6 +617,8 @@ function viewModel() {
   function chatgptForm() {
     var auth = info.kind === 'chatgpt' && info.auth ? info.auth : 'subscription';
     var result = h('div'); var fields = modelFields({ label: T.model.model, placeholder: T.provider.chatgpt_model_hint, small: true });
+    // ChatGPT models take images, so it is on unless this install already runs ChatGPT with it turned off.
+    var images = h('input', { type: 'checkbox' }); images.checked = info.kind === 'chatgpt' ? info.images : true;
     var wrap = h('div');
     var authRow = h('div', { class: 'segments small' });
     ['subscription', 'api-key'].forEach(function (a) {
@@ -622,8 +633,9 @@ function viewModel() {
       wrap.appendChild(h('p', {}, T.provider.credential + ': ', pill(have, T.provider.stored, T.provider.not_stored), have ? ' ' : null, have ? removeButton(auth === 'subscription' ? 'chatgpt-login' : 'openai-key') : null));
       wrap.appendChild(auth === 'subscription' ? chatgptLoginWidget() : secretForm(T.provider.openai_key, T.provider.openai_key_help, function (v) { return api('POST', '/credentials/openai-key', { value: v }); }, 'chatgpt'));
       fields.nodes.forEach(function (n) { wrap.appendChild(n); });
+      wrap.appendChild(h('label', { class: 'row' }, images, T.model.images)); wrap.appendChild(h('p', { class: 'hint' }, T.model.imagesHelp));
       wrap.appendChild(result);
-      wrap.appendChild(h('div', { class: 'row' }, applyRow(result, function () { return strip({ kind: 'chatgpt', auth: auth, model: fields.model.value.trim(), smallModel: fields.small.value.trim() }); }, have)));
+      wrap.appendChild(h('div', { class: 'row' }, applyRow(result, function () { return strip({ kind: 'chatgpt', auth: auth, model: fields.model.value.trim(), smallModel: fields.small.value.trim(), images: images.checked }); }, have)));
     }
     draw();
     return wrap;

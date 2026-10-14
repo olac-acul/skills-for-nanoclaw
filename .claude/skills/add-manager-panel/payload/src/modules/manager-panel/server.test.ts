@@ -610,6 +610,21 @@ describe('model settings', () => {
     expect(backend.groups.every((g) => g.provider === 'opencode' && g.model === 'openai/qwen')).toBe(true);
   });
 
+  it('carries the image choice through preflight, apply and the status, and refuses a value that is not a boolean', async () => {
+    const login = await setupAdmin();
+    const body = { baseUrl: 'http://models.test:9000/v1', model: 'qwen' };
+    backend.probeResult = { ...backend.probeResult, imageSupport: true };
+    const preflight = await call('POST', '/api/v1/model/preflight', { ...login, body: { ...body, images: true } });
+    expect(preflight.body).toMatchObject({ ok: true, image_support: true });
+    expect((await call('GET', '/api/v1/model', login)).body.images).toBe(false);
+    await reauth(login);
+    await call('POST', '/api/v1/model/apply', { ...login, body: { ...body, images: true } });
+    expect(backend.env.OPENCODE_MODEL_INPUT_MODALITIES).toBe('image');
+    expect((await call('GET', '/api/v1/model', login)).body.images).toBe(true);
+    const bad = await call('POST', '/api/v1/model/preflight', { ...login, body: { ...body, images: 'yes' } });
+    expect(bad.status).toBe(400);
+  });
+
   it('expires the re-authentication window', async () => {
     const login = await setupAdmin();
     await reauth(login);

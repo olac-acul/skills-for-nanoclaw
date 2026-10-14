@@ -279,6 +279,22 @@ background work. The field **Small model (optional)** sets it. Leave it empty to
 for everything, which is the right choice when you run a single model. The panel does not check that
 the small model exists on the endpoint; a wrong name shows up when OpenCode first tries to use it.
 
+### Images (photos from the phone app)
+
+The box **The model understands images** tells NanoClaw that the model can receive pictures. It matters for
+the NanoVoice app: a photo sent from the phone reaches the model only when the box is on, and a model that cannot
+see images would otherwise answer as if the photo were not there. It is stored as `OPENCODE_MODEL_INPUT_MODALITIES`
+in `.env` (the panel adds or removes `image` and leaves other entries such as `pdf` alone).
+
+- **Endpoint:** when you check an endpoint, the panel reads what the server says about the model. Some servers
+  (OpenRouter and others) list the input types, and then the box is set for you with a note saying so. Most
+  OpenAI-compatible servers say nothing; the box then keeps its value and you tick it if you know the model sees images.
+  The panel never guesses from the model's name.
+- **ChatGPT:** the box starts on, because the ChatGPT models take images. Turn it off if yours does not.
+- **Claude:** not used; Claude handles images by itself.
+
+A change made here is covered by the same rollback as the rest of a model change.
+
 ### API keys
 
 Model providers' keys and tokens are kept in the **credential gateway** (OneCLI), never in `.env` and
@@ -419,7 +435,7 @@ Applying a change (an endpoint, ChatGPT or Claude) does this, in order:
 2. Writes a **journal** with the previous `.env` values and every agent's previous provider and model.
 3. Writes the `OPENCODE_*` settings to `.env`: for an endpoint, `OPENCODE_PROVIDER`, `OPENCODE_BASE_URL`,
    `OPENCODE_MODEL`, `OPENCODE_SMALL_MODEL` and, when the server reports its context window,
-   `OPENCODE_MODEL_CONTEXT_LIMIT` and `OPENCODE_MODEL_OUTPUT_LIMIT` (half the window, at most 4096);
+   `OPENCODE_MODEL_CONTEXT_LIMIT` and `OPENCODE_MODEL_OUTPUT_LIMIT` (half the window, at most 4096), and `OPENCODE_MODEL_INPUT_MODALITIES` when you made an image choice;
    for ChatGPT the settings listed in [ChatGPT](#chatgpt); for Claude nothing.
 4. Sets every agent group's provider and model: `opencode` and `openai/<model>`, or the default
    provider (Claude) with the model you gave.
@@ -845,7 +861,7 @@ State-changing calls need the cookie, the `X-CSRF-Token` header and an `Origin` 
 | `GET /overview`, `GET /agents`, `GET /channels` | no | read |
 | `POST /agents/{id}/restart` | no | restart an agent |
 | `GET /model` | no | current model settings |
-| `POST /model/preflight` | no | check a provider choice (`kind`: `compatible`, `chatgpt` or `claude`) |
+| `POST /model/preflight` | no | check a provider choice (`kind`: `compatible`, `chatgpt` or `claude`); `images` (true or false) is the image choice, and the answer's `image_support` is what the endpoint says |
 | `POST /model/apply` | yes | apply it to all agents |
 | `GET /credentials` | no | which provider credentials are stored (booleans) |
 | `POST /credentials/claude`, `POST /credentials/openai-key` | yes | store a key or token; nothing is returned |
