@@ -146,16 +146,35 @@ function enable(flags: Map<string, string | true>): void {
   );
 }
 
-function run(command: string, args: string[]): void {
-  const result = spawnSync(command, args, { cwd: root, stdio: 'inherit' });
-  if (result.status !== 0) fail(`\`${command} ${args.join(' ')}\` failed (exit ${result.status ?? 'signal'})`);
+function run(command: string, args: string[], tolerate?: RegExp): void {
+  if (!tolerate) {
+    const result = spawnSync(command, args, { cwd: root, stdio: 'inherit' });
+    if (result.status !== 0) fail(`\`${command} ${args.join(' ')}\` failed (exit ${result.status ?? 'signal'})`);
+    return;
+  }
+  const result = spawnSync(command, args, { cwd: root, encoding: 'utf8' });
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  if (result.status === 0) return;
+  if (tolerate.test(output)) return;
+  process.stderr.write(output);
+  fail(`\`${command} ${args.join(' ')}\` failed (exit ${result.status ?? 'signal'})`);
 }
+
+/** `ncl` is a script of the install (it talks to the running host), not a binary on the path. */
+const ncl = (...args: string[]): string[] => ['exec', 'tsx', 'src/cli/client.ts', ...args];
 
 async function wire(flags: Map<string, string | true>): Promise<void> {
   if (!readSettings(readEnv()).enabled)
     fail('the voice channel is not enabled: run `enable` first, then restart NanoClaw');
   const folder = chooseFolder(flags);
-  const name = typeof flags.get('assistant-name') === 'string' ? (flags.get('assistant-name') as string) : 'Assistant';
+  // The name is only passed when it matters: registering rewrites the name in an existing group's instructions.
+  const name = flags.get('assistant-name');
+  const nameArgs =
+    typeof name === 'string'
+      ? ['--assistant-name', name]
+      : flags.has('dedicated')
+        ? ['--assistant-name', 'Assistant']
+        : [];
   // Registering namespaces the platform id as `voice:default` and queues a welcome message, so it is done
   // only now, while the host runs the voice channel.
   run('pnpm', [
@@ -175,17 +194,20 @@ async function wire(flags: Map<string, string | true>): Promise<void> {
     'voice',
     '--session-mode',
     'shared',
-    '--assistant-name',
-    name,
+    ...nameArgs,
   ]);
-  run('pnpm', ['exec', 'ncl', 'users', 'create', '--id', 'voice:default', '--kind', 'voice']);
-  initDb(CENTRAL_DB_PATH);
+  run('pnpm', ncl('users', 'create', '--id', 'voice:default', '--kind', 'voice'), /already exists|UNIQUE|duplicate/i);
+  await initDb(CENTRAL_DB_PATH);
   const group = await getAgentGroupByFolder(folder);
   if (!group)
     fail(
       `the agent group "${folder}" was not found after registering; add the member by hand: ncl members add --user voice:default --group <id>`,
     );
-  run('pnpm', ['exec', 'ncl', 'members', 'add', '--user', 'voice:default', '--group', group.id]);
+  run(
+    'pnpm',
+    ncl('members', 'add', '--user', 'voice:default', '--group', group.id),
+    /already (a )?member|already exists|UNIQUE|duplicate/i,
+  );
   console.log(`\nThe app is connected to the agent group "${folder}". Run \`pair\` to see what to enter in the app.`);
 }
 
