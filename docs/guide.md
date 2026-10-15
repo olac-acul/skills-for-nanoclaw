@@ -759,20 +759,32 @@ restart NanoClaw; the new channel shows on the panel's Overview.
 
 ### Updating NanoClaw
 
-Use upstream's flow from Claude Code, in the install folder:
+Use the update command of this repository. It drives upstream's own transactional updater (staging copy,
+snapshot, migrations, health check, automatic way back) and adds what that updater cannot know about the skills here.
+Run it as the user that owns the install, from a checkout of this repository, in two steps:
 
+```bash
+node scripts/update-install.mjs prepare --install ~/nanoclaw      # changes nothing that runs
+node scripts/update-install.mjs cutover --install ~/nanoclaw      # the step with downtime; it asks first
 ```
-/update-nanoclaw
-```
 
-It works in a staging copy, takes a snapshot, runs the migrations, checks health and rolls back by
-itself on failure. Before updating, create a backup from the panel or the terminal.
+`prepare` commits the install's local changes (the skills) as one baseline commit, because upstream's updater needs
+a clean tree; prepares the update in a separate copy (by default the newest stable release; `--channel edge` follows
+upstream's `main`); settles a merge that conflicts only in lock files by rebuilding them; refreshes this repository's
+skills in the copy, puts the panel's import line in its place and checks that the voice channel's core changes still
+fit; then builds and runs the whole test suite there. Whatever fails, the install is untouched. If the merge conflicts
+in anything else, it stops and says where.
 
-Upstream refreshes only the channel and provider skills it knows. The manager skills are local code:
-after an update, fetch the latest version of this repository, copy the two skill folders over the
-installed ones and run `/add-manager-backup` and `/add-manager-panel` again, then rebuild and restart.
-The nightly job of this repository applies the skills to upstream's newest code and reports when an
-upstream change breaks one, so check the repository before updating if you are unsure.
+`cutover` stops the service and the agents' containers, rebuilds the image if upstream's change needs it, and starts
+again; plan for several minutes without the assistant. If the release asks for the OneCLI gateway to be moved to
+a pinned version (a security fix, for example), it does that too with a database dump first, as upstream's guide
+says. Any other requirement stops it with the text, to be done by hand or with upstream's `/update-nanoclaw`.
+`status` shows what is prepared and `abandon` drops it. Create a backup first (panel or terminal); the update also
+leaves a git tag and a snapshot of `.env`, `data/`, `groups/` and `store/` for the way back.
+
+Needs `jq` (upstream's tests use it). Everything runs with `umask 022`: some of upstream's tests depend on it, and a
+normal login has 002. A host started by hand (not as a service) is not restarted by upstream's updater: stop it
+before `cutover`; the command starts it again.
 
 ### Rebuilding agent images
 
