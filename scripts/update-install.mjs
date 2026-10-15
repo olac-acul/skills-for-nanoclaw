@@ -15,6 +15,7 @@
  *     is done here, with the database dump upstream's guide asks for, instead of by hand.
  *
  *   node scripts/update-install.mjs prepare [--install DIR] [--channel stable|beta|edge] [--remote NAME] [--yes]
+ *   node scripts/update-install.mjs validate [--install DIR]      (tests the prepared copy again)
  *   node scripts/update-install.mjs cutover [--install DIR] [--yes]
  *   node scripts/update-install.mjs status  [--install DIR]
  *   node scripts/update-install.mjs abandon [--install DIR]
@@ -192,6 +193,17 @@ function preflight(install) {
   for (const tool of ['git', 'pnpm', 'node']) if (run('bash', ['-lc', `command -v ${tool}`]).status !== 0) fail(`${tool} is not installed`);
   if (run('bash', ['-lc', 'command -v jq']).status !== 0) fail('jq is not installed (some of upstream\'s tests need it): apt install jq');
   for (const skill of OUR_SKILLS) if (!fs.existsSync(path.join(SKILLS_REPO, '.claude', 'skills', skill, 'SKILL.md'))) fail(`${skill} is missing from ${SKILLS_REPO}`);
+  // Upstream's updater works on a branch. An install provisioned with `git checkout <commit>` is on none: put `main` on
+  // the current commit, which is safe only when the local `main` has nothing that this commit lacks.
+  if (install.git('symbolic-ref', '-q', 'HEAD').status !== 0) {
+    const hasMain = install.git('rev-parse', '--verify', '-q', 'refs/heads/main').status === 0;
+    // Nothing is lost when every commit of the local main is already in this commit or on a remote branch.
+    const kept = hasMain && (install.git('merge-base', '--is-ancestor', 'refs/heads/main', 'HEAD').status === 0 || install.git('branch', '-r', '--contains', 'refs/heads/main').stdout.trim() !== '');
+    if (hasMain && !kept) fail('this install is on a detached commit and its local branch main has commits that exist nowhere else: put the install on a branch by hand first');
+    const switched = install.git('switch', '-q', '-C', 'main', 'HEAD');
+    if (switched.status !== 0) fail(`could not put the install on the branch main: ${switched.stderr}`);
+    say('the install was on a detached commit: it is now on the branch main, at the same commit');
+  }
   if (install.git('config', 'user.name').stdout.trim() === '') {
     install.git('config', 'user.name', 'nanoclaw');
     install.git('config', 'user.email', 'nanoclaw@install.test');
@@ -261,6 +273,30 @@ function refreshSkills(dir) {
 // Commands
 // ---------------------------------------------------------------------------
 
+/** Run upstream's validation on the staged update. The whole output is kept in a log; the failing tests are named. */
+function runValidation(install, controllerDir, id, stageRoot) {
+  const result = install.controller(controllerDir, 'validate', ['--id', id]);
+  if (result.json?.phase === 'validated') return { ok: true, json: result.json };
+  const full = `${result.json?.error ?? ''}\n${result.stdout}\n${result.stderr}`.replace(/\x1b\[[0-9;]*m/g, '');
+  fs.mkdirSync(install.stateDir, { recursive: true, mode: 0o700 });
+  const log = path.join(install.stateDir, `validate-${Date.now()}.log`);
+  fs.writeFileSync(log, full, { mode: 0o600 });
+  const failed = [...new Set(full.split('\n').filter((line) => /^\s*(FAIL|×)\s/.test(line)).map((line) => line.trim().slice(0, 200)))].slice(0, 12);
+  const message = `validation failed (${describePhase(result.json)}). Failing tests:\n${failed.length ? failed.map((line) => `  ${line}`).join('\n') : '  (none named; see the log)'}\nFull output: ${log}`;
+  return { ok: false, message, stageRoot };
+}
+
+async function validate(install, flags) {
+  const pending = install.readPending();
+  if (!pending || !['validation-failed', 'prepared', 'validated'].includes(pending.phase)) fail('no prepared update to test: run `prepare` first');
+  preflight(install);
+  say('Testing the copy again…');
+  const validated = runValidation(install, pending.controllerDir, pending.id, pending.stageRoot);
+  if (!validated.ok) fail(validated.message, 4);
+  install.writePending({ ...pending, phase: 'validated' });
+  say('The tests pass. The next step is `cutover`.');
+}
+
 async function prepare(install, flags) {
   if (install.readPending()) fail('an update is already prepared: run `cutover` to finish it or `abandon` to drop it');
   preflight(install);
@@ -326,11 +362,10 @@ async function prepare(install, flags) {
   }
 
   say('Testing the copy (build and the whole test suite; a few minutes)…');
-  const validated = install.controller(controllerDir, 'validate', ['--id', prepared.json.id]);
-  if (!validated.json || validated.json.phase !== 'validated') {
-    const tail = `${validated.stderr}`.replace(/\x1b\[[0-9;]*m/g, '').split('\n').filter((line) => /FAIL|Error|error/.test(line)).slice(0, 12).join('\n');
-    install.writePending({ id: prepared.json.id, controllerDir, stageRoot: prepared.json.stageRoot, phase: 'validation-failed', remote });
-    fail(`validation failed (${describePhase(validated.json)}):\n${tail || validated.stderr.slice(-1200)}\nNothing in the install changed. Fix it in ${prepared.json.stageRoot} and run \`prepare\` again, or \`abandon\`.`, 4);
+  const validated = runValidation(install, controllerDir, prepared.json.id, prepared.json.stageRoot);
+  if (!validated.ok) {
+    install.writePending({ id: prepared.json.id, controllerDir, stageRoot: prepared.json.stageRoot, phase: 'validation-failed', remote, requirements: prepared.json.requirements ?? [], channel: prepared.json.channel, upstreamRef: prepared.json.upstreamRef });
+    fail(`${validated.message}\nNothing in the install changed. Run \`validate\` to try the tests again (a test can fail by chance under load), or fix it in ${prepared.json.stageRoot}, or \`abandon\`.`, 4);
   }
 
   const requirements = prepared.json.requirements ?? [];
@@ -436,7 +471,7 @@ async function abandon(install) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const { command, flags } = parseArgs(process.argv.slice(2));
   const install = openInstall(flags);
-  const table = { prepare, cutover, status, abandon };
-  if (!table[command]) fail(`unknown command ${command}; use prepare, cutover, status or abandon`);
+  const table = { prepare, validate, cutover, status, abandon };
+  if (!table[command]) fail(`unknown command ${command}; use prepare, validate, cutover, status or abandon`);
   await table[command](install, flags);
 }
