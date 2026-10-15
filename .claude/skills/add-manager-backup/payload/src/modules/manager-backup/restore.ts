@@ -317,7 +317,7 @@ export function filterEnvForRehearsal(text: string): { kept: string; dropped: st
  * A backup from another machine must not overwrite them, or the restored install would look for a
  * gateway that is not there.
  */
-const TARGET_OWNED_ENV = [/^ONECLI_/, /^NANOCLAW_GATEWAY_PROVIDER$/, /^PANEL_/, /^no_proxy$/i];
+const TARGET_OWNED_ENV = [/^ONECLI_/, /^NANOCLAW_GATEWAY_PROVIDER$/, /^PANEL_/, /^no_proxy$/i, /^VOICE_BIND_HOST$/];
 
 export function isTargetOwnedEnv(key: string): boolean {
   return TARGET_OWNED_ENV.some((pattern) => pattern.test(key));

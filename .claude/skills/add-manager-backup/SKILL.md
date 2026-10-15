@@ -67,6 +67,7 @@ payload/src/modules/manager-backup/tar.test.ts -> src/modules/manager-backup/tar
 payload/src/modules/manager-backup/tar.ts -> src/modules/manager-backup/tar.ts
 payload/src/modules/manager-backup/upstream-host.test.ts -> src/modules/manager-backup/upstream-host.test.ts
 payload/src/modules/manager-backup/upstream-host.ts -> src/modules/manager-backup/upstream-host.ts
+payload/src/modules/manager-backup/voice-files.test.ts -> src/modules/manager-backup/voice-files.test.ts
 ```
 
 If the host later refuses to start with an "upgrade tripwire" message, installing a skill changed the tree outside the setup flow; after the build and tests below pass, record it with `pnpm exec tsx scripts/upgrade-state.ts set` (see `docs/upgrade-recovery.md`).

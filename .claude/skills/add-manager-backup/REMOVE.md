@@ -41,6 +41,7 @@ src/modules/manager-backup/tar.test.ts
 src/modules/manager-backup/tar.ts
 src/modules/manager-backup/upstream-host.test.ts
 src/modules/manager-backup/upstream-host.ts
+src/modules/manager-backup/voice-files.test.ts
 ```
 
 2. If another skill (for example `add-manager-panel`) imports from

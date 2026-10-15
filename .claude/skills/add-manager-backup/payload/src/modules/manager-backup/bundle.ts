@@ -132,7 +132,19 @@ export function newBackupId(now: Date = new Date()): string {
 
 const SESSION_DB = /^v2-sessions\/[^/]+\/[^/]+\/(?:inbound|outbound)\.db$/;
 const SESSION_DB_SIDECAR = /^v2-sessions\/[^/]+\/[^/]+\/(?:inbound|outbound)\.db-(?:journal|wal|shm)$/;
-const TOP_LEVEL_EXCLUDES = new Set(['v2.db', 'v2.db-wal', 'v2.db-shm', 'v2.db-journal', 'circuit-breaker.json']);
+const TOP_LEVEL_EXCLUDES = new Set([
+  'v2.db',
+  'v2.db-wal',
+  'v2.db-shm',
+  'v2.db-journal',
+  'circuit-breaker.json',
+  // The voice channel's live state: who is connected now, and a pairing code that waits for a phone for five minutes.
+  // Neither means anything after a restore, and a restored pairing code could be used on the machine it lands on.
+  'voice-status.json',
+  'voice-status.json.tmp',
+  'voice-pairing.json',
+  'voice-pairing.json.tmp',
+]);
 
 function includeOutsideTxn(rel: string): boolean {
   return rel.split('/')[0] !== TXN_DIR;
@@ -154,6 +166,7 @@ export function includeInData(rel: string, stat: fs.Stats): boolean {
 export const EXCLUDED_DESCRIPTION = [
   'data/v2.db* (replaced by a consistent snapshot at db/v2.db)',
   'sockets, lock files, heartbeats, circuit-breaker state, transient Dockerfiles',
+  "the voice channel's live state (who is connected, a waiting pairing code)",
   'per-spawn runner context (.context)',
   'logs, node_modules, git history, container images',
 ];

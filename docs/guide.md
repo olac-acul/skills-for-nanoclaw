@@ -485,6 +485,14 @@ One encrypted file holding:
 Left out: sockets and lock files, per-run scratch data, logs, container images (rebuilt after a
 restore), and the machine's own identity files unless you ask for them (`--machine-identity`).
 
+**The phone app's voice channel** (`add-voice`): a full restore brings back its token, switch and port (`VOICE_*` in
+`.env`) and the phone's wake-up address (`data/voice-push.json`), so a paired phone keeps working. Two things are
+not part of a backup: the channel's live state (`data/voice-status.json`, who is connected now) and a pairing code that
+is waiting for a phone (`data/voice-pairing.json`), which would otherwise be usable on whatever machine the backup lands
+on. The address the channel listens on (`VOICE_BIND_HOST`) belongs to the machine, like the gateway address: a
+restore keeps the one this machine has, and a machine with none starts with the channel on `127.0.0.1` until you set it
+(see [The phone app](#the-phone-app)).
+
 **Not included: the credentials in the credential gateway.** After restoring onto a new machine,
 install the gateway skill and enter the credentials again. The manifest lists which skills and
 gateway the backup came from.
@@ -636,6 +644,8 @@ a second machine while the first is still running, without two installs answerin
   image names, the model settings) and drops anything that looks like a token, password, key, cookie or
   credentialed URL (it prints the names it dropped);
 - does not restore channel stores, channel login files or the machine's identity;
+- leaves out the whole voice channel: no `VOICE_*` setting (so no token, and the channel does not start) and no
+  wake-up address for the phone, so a rehearsal can neither accept the phone nor wake it;
 - marks pending tasks as paused, closes every pending or in-flight chat message, and marks undelivered
   replies as not deliverable, so a rehearsal host with a working channel has nothing to send.
 
