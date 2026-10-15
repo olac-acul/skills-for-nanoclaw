@@ -75,6 +75,11 @@ It goes through these steps, asking on the way:
    skills of your own with an interactive setup).
 9. **Finishing:** the passwordless sudo is taken away again, if you agree.
 
+Two things it watches for: a first run of NanoClaw's installer can stop while installing the credential gateway
+(*"OneCLI installer did not report its URL"*), and running it again goes on from there, so the script offers to;
+and a `onecli` program already on the machine would make NanoClaw's installer use OneCLI's hosted service instead
+of a local gateway, so the script offers to move it aside first.
+
 Each step is recorded in `/var/lib/nanoclaw-installer/` when it is done. If one stops, fix the cause and run the
 same command again: it goes on from there. `--redo STEP` runs one step again (`base`, `code`, `upstream`,
 `skills`, `panel`, `backups`, `voice`, `extras`, `finish`).

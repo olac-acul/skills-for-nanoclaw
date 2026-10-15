@@ -88,3 +88,31 @@ Things found on the way, and what was done about them:
 - **Empty database.** Before the first start, the restore's pre-flight checks leave an empty
   `data/v2.db` behind; a rollback restores that state.
 - Credentials in the gateway are not part of a backup (decided): they have to be entered again.
+
+## From scratch with `install.sh` (2026-10-15)
+
+`install.sh` run as root on a Debian 13 test LXC, NanoClaw `v2026.10.0`, upstream's installer answered as a
+person would (standard setup, OpenCode with a local OpenAI-compatible endpoint, no channel), a mock model
+behind it.
+
+Verified: every step recorded and resumed after an interruption; the local OneCLI gateway at the pinned version;
+the three skills applied with upstream's engine (tests included), the upgrade marker stamped, the build and the
+restart; the panel on a LAN address, its setup code and the administrator created through its API; the weekly
+backup timer and its key; the voice channel with a separate agent, answering 401 without the token; `--extra`
+offering only skill folders with a `setup.sh`, and a failing one reported without stopping the rest; the
+passwordless sudo taken away; the terminal agent answering; after a reboot, NanoClaw, the gateway, the panel, the
+voice channel and the timer back by themselves and the agent answering again.
+
+Found and fixed on the way:
+
+- **Docker group.** Lingering started the user's service manager before upstream's installer put the user in the
+  `docker` group, so NanoClaw's service could not reach Docker. The group is now given before lingering, and the
+  manager is restarted when it still lacks it.
+- **A `onecli` already on the machine.** Upstream's installer reuses it, and without a configuration for the user
+  that means OneCLI's hosted service (the agents then fail with 401). The installer now says so and offers to move
+  it aside.
+- **First gateway install.** Upstream's first install of the gateway on a machine can stop with *"OneCLI installer
+  did not report its URL"*; a second run of upstream's installer goes on from there. The installer now offers it.
+- **Not a bug, for whoever tests with a mock model:** the agent runner sends only text wrapped in
+  `<message to="...">` with a destination the agent has (`local-cli` for the terminal), so a mock model must
+  answer that way or nothing is delivered.
