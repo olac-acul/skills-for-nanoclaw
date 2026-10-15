@@ -22,6 +22,7 @@ Reverses everything the skill added. The panel's state in
 ```text files
 scripts/manager-credentials.ts
 scripts/manager-panel.ts
+scripts/panel-barrel.mjs
 scripts/tsconfig.manager-credentials.json
 scripts/tsconfig.manager-panel.json
 src/modules/manager-panel/app-icon.test.ts

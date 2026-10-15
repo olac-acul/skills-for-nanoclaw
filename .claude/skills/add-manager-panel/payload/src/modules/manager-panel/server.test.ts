@@ -493,7 +493,8 @@ describe('transport hardening', () => {
     // 30 failed logins inside one minute from one client exhaust the 20/min login bucket.
     for (let i = 0; i < 21; i++) await callFrom('127.0.0.9', 'POST', '/api/v1/session', { password: 'x' });
     expect((await callFrom('127.0.0.9', 'POST', '/api/v1/session', { password: 'x' })).code).toBe('rate_limited');
-  });
+    // Twenty password checks, each a deliberately slow hash: more than the default five seconds when the whole suite shares the machine.
+  }, 60_000);
 });
 
 describe('cookies', () => {

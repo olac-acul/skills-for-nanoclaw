@@ -41,6 +41,8 @@ function wire() {
       if (missing.length) writeFileSync(target, `${current.replace(/\n*$/, '\n')}${missing.join('\n')}\n`);
     }
   }
+  // The panel's import line is placed by a script of the skill (before upstream's community-portal import).
+  if (existsSync(join(testbed, 'scripts', 'panel-barrel.mjs'))) spawnSync('node', ['scripts/panel-barrel.mjs'], { cwd: testbed, stdio: 'ignore' });
 }
 
 /** Upstream skills our code builds on (their payloads are what a real install has after applying them). */

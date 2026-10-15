@@ -37,6 +37,7 @@ If that check fails, install `add-manager-backup` first, or update NanoClaw
 ```nc:copy
 payload/scripts/manager-credentials.ts -> scripts/manager-credentials.ts
 payload/scripts/manager-panel.ts -> scripts/manager-panel.ts
+payload/scripts/panel-barrel.mjs -> scripts/panel-barrel.mjs
 payload/scripts/tsconfig.manager-credentials.json -> scripts/tsconfig.manager-credentials.json
 payload/scripts/tsconfig.manager-panel.json -> scripts/tsconfig.manager-panel.json
 payload/src/modules/manager-panel/app-icon.test.ts -> src/modules/manager-panel/app-icon.test.ts
@@ -86,11 +87,13 @@ qrcode@1.5.4
 @types/qrcode@1.5.6
 ```
 
-Append the module to the host's module list. This is the only edit to an
-existing file; it is one import line.
+Register the module in the host's module list. This is the only edit to an
+existing file; it is one import line. It goes before upstream's `community-portal`
+import when there is one (a test of upstream's expects the portal to come last),
+otherwise at the end; running the script again changes nothing.
 
-```nc:append to:src/modules/index.ts
-import './manager-panel/index.js';
+```nc:run effect:refresh
+node scripts/panel-barrel.mjs
 ```
 
 Build, typecheck the script and run the tests. They include one that runs the
