@@ -190,6 +190,10 @@ function openInstall(flags) {
 
 function preflight(install) {
   process.umask(0o022);
+  // Upstream's updater asks systemd whether the service runs; from `su`/`runuser`/`sudo` there is no user bus unless
+  // this points at the user's runtime directory (the user manager keeps running with lingering enabled).
+  const runtimeDir = `/run/user/${process.getuid?.() ?? ''}`;
+  if (!process.env.XDG_RUNTIME_DIR && fs.existsSync(runtimeDir)) process.env.XDG_RUNTIME_DIR = runtimeDir;
   for (const tool of ['git', 'pnpm', 'node']) if (run('bash', ['-lc', `command -v ${tool}`]).status !== 0) fail(`${tool} is not installed`);
   if (run('bash', ['-lc', 'command -v jq']).status !== 0) fail('jq is not installed (some of upstream\'s tests need it): apt install jq');
   for (const skill of OUR_SKILLS) if (!fs.existsSync(path.join(SKILLS_REPO, '.claude', 'skills', skill, 'SKILL.md'))) fail(`${skill} is missing from ${SKILLS_REPO}`);
