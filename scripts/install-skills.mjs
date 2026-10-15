@@ -80,6 +80,8 @@ function main() {
   process.umask(0o022); // some of upstream's tests depend on it; a login shell often has 002
 
   fs.mkdirSync(path.join(install, '.claude', 'skills'), { recursive: true });
+  // A skill already installed is refreshed first (the engine's install mode never replaces a file that exists).
+  const installed = new Set(flags.skills.filter((name) => fs.existsSync(path.join(install, '.claude', 'skills', name, 'SKILL.md'))));
   for (const name of flags.skills) {
     const target = path.join(install, '.claude', 'skills', name);
     fs.rmSync(target, { recursive: true, force: true });
@@ -91,8 +93,10 @@ function main() {
     for (const name of flags.skills) {
       console.log(`\n=== ${name}`);
       run('pnpm', ['exec', 'tsx', 'scripts/skill-directives.ts', `.claude/skills/${name}/SKILL.md`], install, true);
+      // Refresh replaces its files and dependencies; install then runs its checks, builds and tests.
+      if (installed.has(name)) run('pnpm', ['exec', 'tsx', 'scripts/__apply-skill.mts', name, 'refresh'], install);
       run('pnpm', ['exec', 'tsx', 'scripts/__apply-skill.mts', name], install);
-      console.log(`install-skills: ${name} applied`);
+      console.log(`install-skills: ${name} ${installed.has(name) ? 'refreshed' : 'applied'}`);
     }
   } finally {
     fs.rmSync(runner, { force: true });

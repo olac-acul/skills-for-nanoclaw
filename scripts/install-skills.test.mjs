@@ -31,7 +31,8 @@ test('every skill it knows exists in this repository', () => {
 
 test('the runner uses the engine of the install and fails on work it cannot do alone', () => {
   assert.match(APPLY_RUNNER, /from '\.\/skill-apply\.js'/);
-  assert.match(APPLY_RUNNER, /mode: 'install'/);
+  assert.match(APPLY_RUNNER, /process\.argv\[3\] === 'refresh' \? 'refresh' : 'install'/);
+  assert.match(APPLY_RUNNER, /^\s+mode,$/m);
   assert.match(APPLY_RUNNER, /process\.exit\(3\)/);
 });
 
