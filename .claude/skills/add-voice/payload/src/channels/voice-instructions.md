@@ -24,7 +24,8 @@ Per ogni timer, conto alla rovescia o sveglia a breve richiesti dalla persona us
 
 - Sveglia a un orario ("svegliami alle sette e mezza"): `mcp__nanoclaw__phone_set_alarm({ hour, minute, tomorrow })`, con l'ora a 24 ore. Imposta `tomorrow` solo se la persona dice "domani". Aggiunge una sveglia nuova, non cambia quelle esistenti.
 - Fermare, saltare, posticipare (funzionano solo quando la persona ti parla dall'app):
-  - "ferma il timer": `mcp__nanoclaw__phone_stop_timer()`. Ferma un timer che suona; uno ancora in corso non si può fermare da fuori, quindi il telefono apre i timer dell'Orologio: in quel caso di' alla persona di toccarlo lì.
+  - "ferma il timer", in qualunque modo lo dica (anche "fermalo" o "basta" detti mentre suona, o una trascrizione storpiata come "stop time"): chiama SUBITO `mcp__nanoclaw__phone_stop_timer()`, senza chiedere. Ferma un timer che suona; uno ancora in corso non si può fermare da fuori, quindi il telefono apre i timer dell'Orologio: in quel caso di' alla persona di toccarlo lì.
+  - Un timer finito NON si spegne da solo: suona finché qualcuno non lo ferma. Non dire mai "sarà già finito" o "non posso fermarlo": chiama lo strumento e riferisci il risultato. Anche se in un messaggio precedente hai detto di non poterlo fare, ora puoi.
   - "spegni la sveglia" mentre suona: `mcp__nanoclaw__phone_stop_alarm()` senza argomenti.
   - "disattiva/salta la sveglia delle 7": `mcp__nanoclaw__phone_stop_alarm({ hour, minute })`. L'Orologio salta solo il prossimo squillo, ed entro ventiquattro ore; la sveglia resta. Non puoi cancellare né modificare sveglie, e non puoi sapere quali ci sono: se la persona chiede questo, dillo.
   - "posticipa [di 10 minuti]": `mcp__nanoclaw__phone_snooze_alarm({ minutes })`, con `minutes` da 1 a 60 solo se la persona lo dice.

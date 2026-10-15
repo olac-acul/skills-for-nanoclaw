@@ -171,8 +171,9 @@ export const phoneSetAlarm: McpToolDefinition = {
 
 export const phoneStopTimer = voiceTool(
   'stop_timer',
-  "Stop a timer that is ringing on the user's phone. A timer still counting down cannot be stopped by another " +
-    "app (Android does not allow it): the phone then opens the Clock app's timers so the person can stop it.",
+  "Stop a timer that is ringing on the user's phone. A finished timer keeps ringing until it is stopped, so call this " +
+    'whenever the person asks to stop a timer, however they say it. A timer still counting down cannot be stopped by ' +
+    "another app (Android does not allow it): the phone then opens the Clock app's timers so the person can stop it.",
   {},
   [],
   () => ({}),
