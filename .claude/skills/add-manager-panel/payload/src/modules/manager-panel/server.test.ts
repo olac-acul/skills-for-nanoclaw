@@ -633,7 +633,7 @@ describe('model settings', () => {
     expect(state.body).toMatchObject({
       installed: true,
       connected: true,
-      url: 'ws://100.64.0.9:8767',
+      url: 'ws://100.101.102.109:8767',
       token_set: true,
       push_registered: true,
       agent: 'Alpha',
@@ -851,7 +851,7 @@ describe('providers and credentials', () => {
   it('tells the page which provider is set up and where a local model server is reachable', async () => {
     const login = await setupAdmin();
     const res = await call('GET', '/api/v1/model', login);
-    expect(res.body).toMatchObject({ kind: 'compatible', auth: null, bridge_address: '100.64.0.1' });
+    expect(res.body).toMatchObject({ kind: 'compatible', auth: null, bridge_address: '100.101.102.101' });
   });
 
   it('shows what is stored and never a value', async () => {

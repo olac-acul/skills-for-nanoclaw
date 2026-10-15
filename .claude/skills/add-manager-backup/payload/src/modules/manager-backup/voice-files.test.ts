@@ -22,7 +22,7 @@ const TOKEN = 'v'.repeat(48);
 const VOICE_ENV = [
   'VOICE_ENABLED=true',
   `VOICE_AUTH_TOKEN=${TOKEN}`,
-  'VOICE_BIND_HOST=100.64.0.9',
+  'VOICE_BIND_HOST=100.101.102.109',
   'VOICE_CHANNEL_PORT=8767',
   'VOICE_PLATFORM_ID=default',
 ];
@@ -89,7 +89,7 @@ describe('a full restore', () => {
     const result = await restoreBundle({ host: target.host, bundleFile, key, mode: 'full' });
     const text = env(target);
     expect(text).toContain('VOICE_BIND_HOST=100.64.0.77');
-    expect(text).not.toContain('VOICE_BIND_HOST=100.64.0.9');
+    expect(text).not.toContain('VOICE_BIND_HOST=100.101.102.109');
     expect(result.keptEnvKeys).toContain('VOICE_BIND_HOST');
   });
 

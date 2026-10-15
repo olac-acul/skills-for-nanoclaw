@@ -155,7 +155,7 @@ describe('outbound content', () => {
       '10.1.2.3', // privacy-scan: allow (an example the code must treat as private)
       '192.168.50.20', // privacy-scan: allow
       '172.20.0.1', // privacy-scan: allow
-      '100.64.0.5',
+      '100.101.102.105',
       '169.254.1.1',
       '::1',
       'fd00::1',

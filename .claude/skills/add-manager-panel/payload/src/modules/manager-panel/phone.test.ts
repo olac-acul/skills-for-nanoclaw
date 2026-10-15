@@ -32,7 +32,7 @@ const port = (over: Partial<PhoneOptions> = {}) =>
 
 describe('addressFor', () => {
   it('gives the phone an address, or the reason there is none', () => {
-    expect(addressFor('100.64.0.9', 8767)).toEqual({ url: 'ws://100.64.0.9:8767', problem: null });
+    expect(addressFor('100.101.102.109', 8767)).toEqual({ url: 'ws://100.101.102.109:8767', problem: null });
     expect(addressFor('fd7a::1', 9000)).toEqual({ url: 'ws://[fd7a::1]:9000', problem: null });
     expect(addressFor('127.0.0.1', 8767)).toEqual({ url: null, problem: 'loopback' });
     expect(addressFor('localhost', 8767)).toEqual({ url: null, problem: 'loopback' });
@@ -87,7 +87,7 @@ describe('readRecordedStatus', () => {
 
 describe('the phone port', () => {
   it('reports a channel that is on, listening and connected', async () => {
-    env([`VOICE_ENABLED=true`, `VOICE_AUTH_TOKEN=${TOKEN}`, 'VOICE_BIND_HOST=100.64.0.9']);
+    env([`VOICE_ENABLED=true`, `VOICE_AUTH_TOKEN=${TOKEN}`, 'VOICE_BIND_HOST=100.101.102.109']);
     status({
       listening: true,
       connected: true,
@@ -104,7 +104,7 @@ describe('the phone port', () => {
       connectedAt: '2026-10-02T12:00:00.000Z',
       lastDisconnectAt: null,
       locale: 'it-IT',
-      url: 'ws://100.64.0.9:8767',
+      url: 'ws://100.101.102.109:8767',
       addressProblem: null,
       tokenSet: true,
       pushRegistered: true,
@@ -177,7 +177,7 @@ describe('the phone port', () => {
 
 describe('pairing', () => {
   const pairingFile = () => path.join(root, 'data', 'voice-pairing.json');
-  const ready = () => env([`VOICE_ENABLED=true`, `VOICE_AUTH_TOKEN=${TOKEN}`, 'VOICE_BIND_HOST=100.64.0.9']);
+  const ready = () => env([`VOICE_ENABLED=true`, `VOICE_AUTH_TOKEN=${TOKEN}`, 'VOICE_BIND_HOST=100.101.102.109']);
 
   it('makes a code from the pairing alphabet, different each time', () => {
     const code = makePairingCode();
@@ -187,8 +187,8 @@ describe('pairing', () => {
   });
 
   it('writes the link as the protocol says, with the address encoded', () => {
-    expect(pairingLink('ws://100.64.0.9:8767', '7H2KQ9M4XB5TD3WE')).toBe(
-      'nanovoice://pair?v=1&server=ws%3A%2F%2F100.64.0.9%3A8767&code=7H2KQ9M4XB5TD3WE',
+    expect(pairingLink('ws://100.101.102.109:8767', '7H2KQ9M4XB5TD3WE')).toBe(
+      'nanovoice://pair?v=1&server=ws%3A%2F%2F100.101.102.109%3A8767&code=7H2KQ9M4XB5TD3WE',
     );
   });
 
@@ -205,7 +205,7 @@ describe('pairing', () => {
       expiresAt: new Date(now + PAIRING_TTL_MS).toISOString(),
     });
     const code = /code=([0-9A-Z]{16})$/.exec(drawn)![1];
-    expect(drawn.startsWith('nanovoice://pair?v=1&server=ws%3A%2F%2F100.64.0.9%3A8767&code=')).toBe(true);
+    expect(drawn.startsWith('nanovoice://pair?v=1&server=ws%3A%2F%2F100.101.102.109%3A8767&code=')).toBe(true);
     const stored = fs.readFileSync(pairingFile(), 'utf8');
     expect(stored).not.toContain(code);
     expect(stored).not.toContain(TOKEN);
@@ -239,7 +239,7 @@ describe('pairing', () => {
   it('refuses when there is no token, no usable address, or no voice channel, writing nothing', async () => {
     env([`VOICE_AUTH_TOKEN=${TOKEN}`]); // the channel listens on this machine only
     await expect(port().startPairing()).rejects.toMatchObject({ code: 'no_address' });
-    env(['VOICE_BIND_HOST=100.64.0.9']);
+    env(['VOICE_BIND_HOST=100.101.102.109']);
     await expect(port().startPairing()).rejects.toMatchObject({ code: 'token_missing' });
     ready();
     await expect(port({ installed: () => false }).startPairing()).rejects.toMatchObject({ code: 'not_installed' });

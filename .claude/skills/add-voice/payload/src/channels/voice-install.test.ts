@@ -30,8 +30,8 @@ describe('tokens', () => {
 describe('upsertEnv', () => {
   it('sets, replaces and removes keys and keeps everything else', () => {
     const before = '# keep me\nA=1\nVOICE_ENABLED=false\nZ=last\n';
-    const after = upsertEnv(before, { VOICE_ENABLED: 'true', VOICE_BIND_HOST: '100.64.0.9', A: null });
-    expect(after).toBe('# keep me\nVOICE_ENABLED=true\nZ=last\nVOICE_BIND_HOST=100.64.0.9\n');
+    const after = upsertEnv(before, { VOICE_ENABLED: 'true', VOICE_BIND_HOST: '100.101.102.109', A: null });
+    expect(after).toBe('# keep me\nVOICE_ENABLED=true\nZ=last\nVOICE_BIND_HOST=100.101.102.109\n');
   });
   it('writes to the last of a repeated key', () => {
     expect(upsertEnv('K=1\nK=2\n', { K: '3' })).toBe('K=1\nK=3\n');
@@ -90,18 +90,18 @@ describe('addresses', () => {
     expect(readSettings('')).toEqual({ enabled: false, host: '127.0.0.1', port: 8767, hasToken: false });
     expect(
       readSettings(
-        `VOICE_ENABLED=true\nVOICE_BIND_HOST=100.64.0.9\nVOICE_CHANNEL_PORT=9000\nVOICE_AUTH_TOKEN=${'a'.repeat(48)}\n`,
+        `VOICE_ENABLED=true\nVOICE_BIND_HOST=100.101.102.109\nVOICE_CHANNEL_PORT=9000\nVOICE_AUTH_TOKEN=${'a'.repeat(48)}\n`,
       ),
     ).toEqual({
       enabled: true,
-      host: '100.64.0.9',
+      host: '100.101.102.109',
       port: 9000,
       hasToken: true,
     });
   });
   it('gives the phone an address, or says why not', () => {
-    expect(pairingAddress({ enabled: true, host: '100.64.0.9', port: 8767, hasToken: true })).toEqual({
-      url: 'ws://100.64.0.9:8767',
+    expect(pairingAddress({ enabled: true, host: '100.101.102.109', port: 8767, hasToken: true })).toEqual({
+      url: 'ws://100.101.102.109:8767',
     });
     expect(pairingAddress({ enabled: true, host: '0.0.0.0', port: 8767, hasToken: true }, 'nas.test')).toEqual({
       url: 'ws://nas.test:8767',
@@ -113,7 +113,7 @@ describe('addresses', () => {
     expect('problem' in pairingAddress({ enabled: true, host: '0.0.0.0', port: 8767, hasToken: true })).toBe(true);
   });
   it('checks a bind address', () => {
-    for (const ok of ['100.64.0.9', 'fd7a::1', 'phone-server', 'a.b.test']) expect(validBindHost(ok), ok).toBe(true);
+    for (const ok of ['100.101.102.109', 'fd7a::1', 'phone-server', 'a.b.test']) expect(validBindHost(ok), ok).toBe(true);
     for (const bad of ['', '999.1.1.1', 'a b', 'x;rm', '-bad']) expect(validBindHost(bad), bad).toBe(false);
   });
 });

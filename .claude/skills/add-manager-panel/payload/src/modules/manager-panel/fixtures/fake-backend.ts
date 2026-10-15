@@ -79,7 +79,7 @@ export function fakeBackend(dir: string): FakeBackend {
       connectedAt: '2026-10-02T12:00:00.000Z',
       lastDisconnectAt: null,
       locale: 'it-IT',
-      url: 'ws://100.64.0.9:8767',
+      url: 'ws://100.101.102.109:8767',
       addressProblem: null,
       tokenSet: true,
       pushRegistered: true,
@@ -114,7 +114,7 @@ export function fakeBackend(dir: string): FakeBackend {
         self.phoneState.pairingPending = false;
       },
     } satisfies PhonePort,
-    bridgeAddress: () => '100.64.0.1',
+    bridgeAddress: () => '100.101.102.101',
     credentials: {
       status: async () => ({ ...self.creds }),
       async saveClaude(value) {

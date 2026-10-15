@@ -351,8 +351,8 @@ describe('gateway selection and credentials', () => {
 
 describe('rehearsal report', () => {
   it("does not list as dropped a setting this machine's own value replaced", async () => {
-    fs.appendFileSync(path.join(source.project, '.env'), 'NO_PROXY=100.64.0.1\n');
-    fs.appendFileSync(path.join(target.project, '.env'), 'no_proxy=100.64.0.2\n');
+    fs.appendFileSync(path.join(source.project, '.env'), 'NO_PROXY=100.101.102.101\n');
+    fs.appendFileSync(path.join(target.project, '.env'), 'no_proxy=100.101.102.102\n');
     const file = path.join(tmp, 'bundles', 'proxy.mbk');
     await createBundle({ host: source.host, key, destFile: file });
     const result = await restoreBundle({ host: target.host, bundleFile: file, key, mode: 'rehearsal' });

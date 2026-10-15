@@ -205,8 +205,8 @@ describe('panel on a real install', () => {
 
 describe('parseBridgeGateway', () => {
   it('reads the gateway of the default bridge network', () => {
-    expect(parseBridgeGateway('100.64.0.1 ')).toBe('100.64.0.1');
-    expect(parseBridgeGateway('fd00::1 100.64.0.2 \n')).toBe('100.64.0.2');
+    expect(parseBridgeGateway('100.101.102.101 ')).toBe('100.101.102.101');
+    expect(parseBridgeGateway('fd00::1 100.101.102.102 \n')).toBe('100.101.102.102');
   });
   it('is null for empty or unusable output', () => {
     expect(parseBridgeGateway('')).toBeNull();
