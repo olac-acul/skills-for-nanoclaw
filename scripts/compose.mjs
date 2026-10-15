@@ -14,6 +14,8 @@ import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } fro
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { APPLY_RUNNER } from './skill-runner.mjs';
+
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = new Map();
 for (let i = 2; i < process.argv.length; i++) {
@@ -57,25 +59,7 @@ for (const name of skills) {
   cpSync(join(skillsRoot, name), join(workdir, '.claude', 'skills', name), { recursive: true });
 }
 
-const runner = `
-import { execSync } from 'node:child_process';
-import path from 'node:path';
-import { applySkill } from './skill-apply.js';
-
-const name = process.argv[2];
-const root = process.cwd();
-const result = await applySkill(path.join(root, '.claude/skills', name), root, {
-  mode: 'install',
-  exec: (cmd) => {
-    const out = execSync(cmd, { cwd: root, shell: '/bin/bash', encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
-    process.stdout.write(out);
-    return out;
-  },
-});
-console.log('\\nAPPLY-RESULT ' + JSON.stringify({ applied: result.applied.length, skipped: result.skipped.length, deferred: result.deferred, agentTasks: result.agentTasks.map((t) => t.reason ?? t) }));
-if (result.deferred.length || result.agentTasks.length) process.exit(3);
-`;
-writeFileSync(join(workdir, 'scripts', '__apply-skill.mts'), runner);
+writeFileSync(join(workdir, 'scripts', '__apply-skill.mts'), APPLY_RUNNER);
 
 for (const name of skills) {
   run('pnpm', ['exec', 'tsx', 'scripts/skill-directives.ts', `.claude/skills/${name}/SKILL.md`], { cwd: workdir, stdio: ['ignore', 'ignore', 'inherit'] });

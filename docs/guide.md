@@ -43,6 +43,42 @@ store API keys, install channels, update NanoClaw. Those are in [Terminal-only t
 
 ## Installing
 
+### Installing from scratch
+
+On a fresh Debian 13 machine (an LXC needs nesting for Docker), as root and in a real terminal (a console or
+`ssh -t`), not through a chat:
+
+```bash
+git clone https://github.com/olac-acul/skills-for-nanoclaw.git
+bash skills-for-nanoclaw/install.sh
+```
+
+It goes through these steps, asking on the way:
+
+1. **System:** a few packages, Bun (the version the agent containers use), the user NanoClaw runs as (`nanoclaw`;
+   `--user NAME` for another), its user services allowed to run without a login, and passwordless sudo for the
+   duration of the installation, which upstream's installer needs.
+2. **Code:** NanoClaw at its newest stable release, on the branch `main`, and a copy of this repository in the
+   user's home (the update command lives there).
+3. **NanoClaw's own installer** (`nanoclaw.sh`): Node, Docker, the model provider, the credential gateway, the time
+   zone, the assistant and the first channel. For an OpenAI-compatible server choose OpenCode, then *Local or
+   self-hosted*; for the gateway choose OneCLI. Tokens and keys go only into its prompts.
+4. **These skills:** backups and the panel always, the voice channel if you use the NanoVoice app. They are
+   applied with NanoClaw's own skill engine (`scripts/install-skills.mjs`), which builds and runs their tests.
+5. **The panel:** where it listens (only this machine, one of the machine's addresses, for example a VPN one, or
+   every address), then the one-time setup code for the administrator.
+6. **Weekly backups:** day, time and how many to keep; the backup key is shown once, to store in a password
+   manager (see [Scheduled backups](#scheduled-backups)).
+7. **The voice channel** (if chosen): which agent answers the app, and the address it listens on. Then pair the
+   phone with the QR of the panel's Phone page.
+8. **Extra skills:** with `--extra DIR`, each `DIR/<skill>/setup.sh` is offered and run (for example private
+   skills of your own with an interactive setup).
+9. **Finishing:** the passwordless sudo is taken away again, if you agree.
+
+Each step is recorded in `/var/lib/nanoclaw-installer/` when it is done. If one stops, fix the cause and run the
+same command again: it goes on from there. `--redo STEP` runs one step again (`base`, `code`, `upstream`,
+`skills`, `panel`, `backups`, `voice`, `extras`, `finish`).
+
 ### Requirements
 
 - A working NanoClaw install, version 2.4 or later, with Docker. See upstream's README.

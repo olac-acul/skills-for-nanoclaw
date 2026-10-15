@@ -1,0 +1,93 @@
+#!/usr/bin/env node
+/**
+ * Apply this repository's skills to a NanoClaw install with upstream's own skill engine, then record the new state
+ * and restart the service. It is what `compose.mjs` does on a throw-away checkout, done on a real install.
+ *
+ *   node scripts/install-skills.mjs --install DIR [--skills add-manager-backup,add-manager-panel,add-voice] [--no-restart]
+ *
+ * Run it as the user that owns the install. Each skill checks its prerequisites, copies its files, builds and runs
+ * its tests; applying one again is safe. Nothing is committed: `update-install.mjs` commits the skills as a baseline
+ * before the first update, as it does for any install.
+ */
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { APPLY_RUNNER } from './skill-runner.mjs';
+
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export const DEFAULT_SKILLS = ['add-manager-backup', 'add-manager-panel', 'add-voice'];
+
+function fail(message) {
+  console.error(`install-skills: ${message}`);
+  process.exit(1);
+}
+
+export function parseArgs(argv) {
+  const flags = { install: null, skills: DEFAULT_SKILLS, restart: true };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--install') flags.install = argv[++i];
+    else if (arg === '--skills') flags.skills = (argv[++i] ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    else if (arg === '--no-restart') flags.restart = false;
+    else throw new Error(`unknown argument ${JSON.stringify(arg)}`);
+  }
+  if (!flags.install) throw new Error('--install DIR is required');
+  const unknown = flags.skills.filter((s) => !DEFAULT_SKILLS.includes(s));
+  if (unknown.length) throw new Error(`not a skill of this repository: ${unknown.join(', ')}`);
+  if (flags.skills.includes('add-manager-panel') && !flags.skills.includes('add-manager-backup'))
+    throw new Error('add-manager-panel needs add-manager-backup');
+  // The engine applies them in this order: the panel uses the backup library.
+  flags.skills = DEFAULT_SKILLS.filter((s) => flags.skills.includes(s));
+  return flags;
+}
+
+function run(command, args, cwd, quiet = false) {
+  if (!quiet) console.log(`\n$ ${command} ${args.join(' ')}`);
+  const result = spawnSync(command, args, { cwd, stdio: quiet ? ['ignore', 'ignore', 'inherit'] : 'inherit' });
+  if (result.status !== 0) fail(`"${command} ${args.join(' ')}" failed (${result.status ?? result.signal})`);
+}
+
+function main() {
+  let flags;
+  try {
+    flags = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    fail(error.message);
+  }
+  const install = path.resolve(flags.install);
+  for (const file of ['package.json', 'scripts/skill-apply.ts', 'scripts/skill-directives.ts', 'src/cli/client.ts'])
+    if (!fs.existsSync(path.join(install, file))) fail(`${install} is not a NanoClaw install (${file} is missing)`);
+  process.umask(0o022); // some of upstream's tests depend on it; a login shell often has 002
+
+  fs.mkdirSync(path.join(install, '.claude', 'skills'), { recursive: true });
+  for (const name of flags.skills) {
+    const target = path.join(install, '.claude', 'skills', name);
+    fs.rmSync(target, { recursive: true, force: true });
+    fs.cpSync(path.join(repo, '.claude', 'skills', name), target, { recursive: true });
+  }
+  const runner = path.join(install, 'scripts', '__apply-skill.mts');
+  fs.writeFileSync(runner, APPLY_RUNNER);
+  try {
+    for (const name of flags.skills) {
+      console.log(`\n=== ${name}`);
+      run('pnpm', ['exec', 'tsx', 'scripts/skill-directives.ts', `.claude/skills/${name}/SKILL.md`], install, true);
+      run('pnpm', ['exec', 'tsx', 'scripts/__apply-skill.mts', name], install);
+      console.log(`install-skills: ${name} applied`);
+    }
+  } finally {
+    fs.rmSync(runner, { force: true });
+  }
+
+  // The install changed outside upstream's own flows: record it, or the host refuses to start (the upgrade tripwire).
+  run('pnpm', ['exec', 'tsx', 'scripts/upgrade-state.ts', 'set'], install);
+  run('pnpm', ['run', 'build'], install);
+  if (flags.restart) {
+    if (!fs.existsSync(path.join(install, 'setup', 'lib', 'restart.sh'))) fail('setup/lib/restart.sh is missing: restart NanoClaw by hand');
+    run('bash', ['setup/lib/restart.sh'], install);
+  }
+  console.log(`\ninstall-skills: ${flags.skills.join(', ')} installed in ${install}`);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

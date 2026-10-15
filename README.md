@@ -24,7 +24,17 @@ reference. The panel serves the same text at `/guide`.
 
 ## Install
 
-The skills follow upstream's skill format (`SKILL.md` with `nc:` blocks, `REMOVE.md`, files under `payload/`).
+**From scratch**, on a fresh Debian 13 machine (or LXC with nesting), as root, in a real terminal:
+
+```bash
+git clone https://github.com/olac-acul/skills-for-nanoclaw.git
+bash skills-for-nanoclaw/install.sh
+```
+
+It runs upstream's own installer and then adds these skills, asking everything on the way (see
+[the guide](docs/guide.md#installing-from-scratch)).
+
+**On an install you already have**: the skills follow upstream's skill format (`SKILL.md` with `nc:` blocks, `REMOVE.md`, files under `payload/`).
 Copy the folders you want from `.claude/skills/` into the same folder of your NanoClaw checkout, then, in Claude
 Code started in that checkout, run `/add-manager-backup` and then `/add-manager-panel`. Each skill checks that
 the NanoClaw version has what it needs, copies its files, builds and runs its own tests, and tells you what is
