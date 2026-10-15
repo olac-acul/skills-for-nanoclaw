@@ -75,6 +75,20 @@ as_user() {
     bash -c "umask 022; cd \"\$HOME\"; $1"
 }
 in_install() { as_user "cd ~/nanoclaw && $1"; }
+
+# The user's service manager must have the docker group (it keeps the groups it started with).
+refresh_user_manager() {
+  local uid gid pid
+  uid="$(id -u "$NC_USER")"
+  gid="$(getent group docker | cut -d: -f3)"
+  pid="$(pgrep -u "$uid" -x systemd | head -1)"
+  [[ -n "$gid" && -n "$pid" ]] || return 0
+  if ! grep -qE "^Groups:.*\b$gid\b" "/proc/$pid/status"; then
+    note "restarting $NC_USER's service manager so its services get the docker group"
+    systemctl restart "user@$uid.service"
+    for _ in $(seq 1 20); do [[ -S "/run/user/$uid/bus" ]] && break; sleep 0.5; done
+  fi
+}
 ncl() { in_install "pnpm --silent exec tsx src/cli/client.ts $*"; }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -91,6 +105,10 @@ step_base() {
     useradd -m -s /bin/bash "$NC_USER"
     note "user $NC_USER created (no password: reach it with 'su - $NC_USER' as root)"
   fi
+  # In the docker group BEFORE lingering starts the user's service manager: a manager started earlier keeps the
+  # groups it had, and NanoClaw's service would not reach Docker. The docker package keeps an existing group.
+  getent group docker >/dev/null || groupadd --system docker
+  usermod -aG docker "$NC_USER"
   # Upstream's installer installs Node and Docker with sudo. Taken away again at the end (step 'finish').
   echo "$NC_USER ALL=(ALL) NOPASSWD:ALL" >"$SUDOERS.tmp" && chmod 440 "$SUDOERS.tmp" && visudo -cqf "$SUDOERS.tmp" \
     && mv "$SUDOERS.tmp" "$SUDOERS"
@@ -148,8 +166,19 @@ step_upstream() {
      - the time zone, the assistant's name and the first channel (for example Telegram, with the bot token).
    Paste tokens and keys only into its prompts. When it says it is done, this script goes on.
 INFO
+  local existing
+  existing="$(as_user "command -v onecli" || true)"
+  if [[ -n "$existing" && ! -f "$HOME_DIR/.onecli/docker-compose.yml" ]]; then
+    note "A OneCLI program is already installed ($existing) but $NC_USER has no OneCLI gateway of its own."
+    note "NanoClaw's installer would reuse it, which without a configuration means OneCLI's hosted service."
+    if ask_no "Move it aside ($existing.before-nanoclaw) so a local gateway is installed?"; then
+      mv "$existing" "$existing.before-nanoclaw"
+    fi
+  fi
+  refresh_user_manager
   ask "Press Enter to start it." >/dev/null
   in_install "bash nanoclaw.sh" || die "NanoClaw's installer did not finish. Fix the cause and run this script again."
+  refresh_user_manager
   in_install "pnpm --silent exec tsx src/cli/client.ts groups list --json >/dev/null" \
     || die "NanoClaw does not answer after its installer: check 'systemctl --user status' as $NC_USER, then run this again"
   mark upstream
@@ -245,10 +274,12 @@ step_voice() {
   [[ -f "$STATE_DIR/$NC_USER.voice" ]] || { mark voice; return; }
   say "7. The voice channel for NanoVoice"
   local list choice folder bind i=1 line
+  # Not the terminal agent setup makes ('ping_test'): with the voice channel wired to it, its answers to the
+  # terminal would go to the app.
   mapfile -t list < <(ncl groups list --json | python3 -c '
 import json, sys
 for g in json.load(sys.stdin).get("data") or []:
-    if g.get("folder") and g.get("id"):
+    if g.get("folder") and g.get("id") and g["folder"] != "ping_test":
         print(g["folder"] + "\t" + (g.get("name") or ""))')
   note "Which agent answers the app? One you have shares its memory and tools with the app; a separate one does not."
   for line in "${list[@]}"; do printf '     %d. %s (%s)\n' "$i" "${line##*$'\t'}" "${line%%$'\t'*}"; i=$((i + 1)); done
