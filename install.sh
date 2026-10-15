@@ -57,6 +57,8 @@ done
 STATE_DIR="/var/lib/nanoclaw-installer"
 STATE="$STATE_DIR/$NC_USER.done"
 mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR" && touch "$STATE"
+# Steps recorded for a user that no longer exists are not done any more.
+id "$NC_USER" >/dev/null 2>&1 || : >"$STATE"
 done_step() { grep -qx "$1" "$STATE" && [[ "$REDO" != "$1" ]]; }
 mark() { grep -qx "$1" "$STATE" || echo "$1" >>"$STATE"; }
 
