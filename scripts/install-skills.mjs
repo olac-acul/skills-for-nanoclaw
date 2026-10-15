@@ -5,6 +5,9 @@
  *
  *   node scripts/install-skills.mjs --install DIR [--skills add-manager-backup,add-manager-panel,add-voice] [--no-restart]
  *
+ * It is also how newer versions of these skills reach an install whose NanoClaw has not changed (when
+ * `update-install.mjs` finds nothing new upstream): run it again from an updated checkout of this repository.
+ *
  * Run it as the user that owns the install. Each skill checks its prerequisites, copies its files, builds and runs
  * its tests; applying one again is safe. Nothing is committed: `update-install.mjs` commits the skills as a baseline
  * before the first update, as it does for any install.
@@ -49,6 +52,21 @@ function run(command, args, cwd, quiet = false) {
   if (result.status !== 0) fail(`"${command} ${args.join(' ')}" failed (${result.status ?? result.signal})`);
 }
 
+/** Group folders whose instructions already carry the voice channel's section (marker of the add-voice skill). */
+export function foldersWithVoiceSection(install) {
+  const groups = path.join(install, 'groups');
+  if (!fs.existsSync(groups)) return [];
+  return fs
+    .readdirSync(groups, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => {
+      const file = path.join(groups, name, 'instructions.prepend.md');
+      return fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes('<!-- nanovoice:begin');
+    })
+    .sort();
+}
+
 function main() {
   let flags;
   try {
@@ -79,6 +97,11 @@ function main() {
   } finally {
     fs.rmSync(runner, { force: true });
   }
+
+  // A newer add-voice can change the agent's voice instructions: bring them up to date where they are in use.
+  if (flags.skills.includes('add-voice'))
+    for (const folder of foldersWithVoiceSection(install))
+      run('pnpm', ['exec', 'tsx', 'scripts/voice-setup.ts', 'instructions', '--folder', folder], install);
 
   // The install changed outside upstream's own flows: record it, or the host refuses to start (the upgrade tripwire).
   run('pnpm', ['exec', 'tsx', 'scripts/upgrade-state.ts', 'set'], install);

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { DEFAULT_SKILLS, parseArgs } from './install-skills.mjs';
+import { DEFAULT_SKILLS, foldersWithVoiceSection, parseArgs } from './install-skills.mjs';
 import { APPLY_RUNNER } from './skill-runner.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -53,4 +53,21 @@ test('install.sh knows every step it runs and is valid bash', () => {
   assert.ok(loop, 'the step loop');
   for (const step of loop[1].trim().split(/\s+/)) assert.match(script, new RegExp(`^step_${step}\\(\\) \\{`, 'm'), step);
   assert.equal(spawnSync('bash', ['-n', path.join(here, '..', 'install.sh')]).status, 0);
+});
+
+test('finds the groups whose instructions carry the voice section, and only those', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'install-skills-'));
+  try {
+    const write = (folder, text) => {
+      fs.mkdirSync(path.join(dir, 'groups', folder), { recursive: true });
+      if (text !== null) fs.writeFileSync(path.join(dir, 'groups', folder, 'instructions.prepend.md'), text);
+    };
+    write('main', 'Persona.\n\n<!-- nanovoice:begin (managed by the add-voice skill) -->\nVoice.\n<!-- nanovoice:end -->\n');
+    write('other', 'Persona only.\n');
+    write('empty', null);
+    assert.deepEqual(foldersWithVoiceSection(dir), ['main']);
+    assert.deepEqual(foldersWithVoiceSection(path.join(dir, 'missing')), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -327,7 +327,8 @@ async function prepare(install, flags) {
   say(describePhase(prepared.json));
   if (prepared.json.phase === 'prepared' && prepared.json.targetHead === prepared.json.originalHead) {
     install.controller(controllerDir, 'abandon', ['--id', prepared.json.id]);
-    say('Already on the newest version. Nothing to do.');
+    say('Already on the newest version of NanoClaw. Nothing to do here.');
+    say('Newer versions of these skills alone are installed with: node scripts/install-skills.mjs --install <the install folder>');
     return;
   }
   if (prepared.json.phase === 'conflict') {
