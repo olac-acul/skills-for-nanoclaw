@@ -27,6 +27,9 @@ import {
   phoneSetAlarm,
   phoneSetTimer,
   phoneSmsDraft,
+  phoneSnoozeAlarm,
+  phoneStopAlarm,
+  phoneStopTimer,
   phoneVolume,
   voiceWorking,
 } from './phone.js';
@@ -322,6 +325,49 @@ describe('photo tools', () => {
   });
 });
 
+describe('clock controls', () => {
+  const route = (channelType: string) =>
+    setCurrentReplyRoute({ inReplyTo: 'm1', channelType, platformId: `${channelType}:1`, threadId: null });
+
+  it('queue stop and snooze actions from the app, with optional arguments only when given', async () => {
+    seedVoiceDestination();
+    route('voice');
+    for (const [tool, args] of [
+      [phoneStopTimer, {}],
+      [phoneStopAlarm, {}],
+      [phoneStopAlarm, { hour: 7 }],
+      [phoneStopAlarm, { hour: 6, minute: 45 }],
+      [phoneSnoozeAlarm, {}],
+      [phoneSnoozeAlarm, { minutes: 10 }],
+    ] as const) {
+      expect((await tool.handler(args as Record<string, unknown>)).isError).toBeUndefined();
+    }
+    expect(getUndeliveredMessages().map((m) => asMarkers(m.content))).toEqual([
+      '[[action:stop_timer {}]]',
+      '[[action:stop_alarm {}]]',
+      '[[action:stop_alarm {"hour":7,"minute":0}]]',
+      '[[action:stop_alarm {"hour":6,"minute":45}]]',
+      '[[action:snooze_alarm {}]]',
+      '[[action:snooze_alarm {"minutes":10}]]',
+    ]);
+  });
+
+  it('refuse bad times, bad minutes and other channels, writing nothing', async () => {
+    seedVoiceDestination();
+    route('voice');
+    expect((await phoneStopAlarm.handler({ hour: 24 })).isError).toBe(true);
+    expect((await phoneStopAlarm.handler({ hour: 7.5 })).isError).toBe(true);
+    expect((await phoneStopAlarm.handler({ minute: 30 })).isError).toBe(true);
+    expect((await phoneStopAlarm.handler({ hour: 7, minute: 60 })).isError).toBe(true);
+    expect((await phoneSnoozeAlarm.handler({ minutes: 0 })).isError).toBe(true);
+    expect((await phoneSnoozeAlarm.handler({ minutes: 61 })).isError).toBe(true);
+    route('telegram');
+    expect((await phoneStopTimer.handler({})).isError).toBe(true);
+    expect((await phoneStopAlarm.handler({ hour: 7 })).isError).toBe(true);
+    expect(getUndeliveredMessages()).toHaveLength(0);
+  });
+});
+
 describe('music, Signal and notes tools', () => {
   it('queue their actions from the app and refuse from elsewhere', async () => {
     seedVoiceDestination();
@@ -340,7 +386,6 @@ describe('music, Signal and notes tools', () => {
   });
 });
 
-
 describe('calendar event changes', () => {
   function voice() {
     seedVoiceDestination();
@@ -349,7 +394,9 @@ describe('calendar event changes', () => {
 
   it('queues structured update and delete actions for the current request', async () => {
     voice();
-    expect((await phoneCalendarUpdate.handler({ event_id: 42, start: '2026-10-21T10:00', location: '' })).isError).toBeFalsy();
+    expect(
+      (await phoneCalendarUpdate.handler({ event_id: 42, start: '2026-10-21T10:00', location: '' })).isError,
+    ).toBeFalsy();
     expect((await phoneCalendarDelete.handler({ event_id: 43 })).isError).toBeFalsy();
     const messages = getUndeliveredMessages();
     expect(messages.map((m) => JSON.parse(m.content).voice_action)).toEqual([
@@ -380,11 +427,17 @@ describe('calendar event changes', () => {
   it('checks actual dates, interval order and text before sending', async () => {
     voice();
     for (const bad of [
-      { start: '2026-02-30T10:00' }, { start: '2026-10-21T24:00' }, { start: 'domani' },
-      { start: '2026-10-21T10:00', end: '2026-10-21T09:00' }, { title: '' },
-      { title: 'x'.repeat(201) }, { location: 'x'.repeat(501) }, { location: null },
+      { start: '2026-02-30T10:00' },
+      { start: '2026-10-21T24:00' },
+      { start: 'domani' },
+      { start: '2026-10-21T10:00', end: '2026-10-21T09:00' },
+      { title: '' },
+      { title: 'x'.repeat(201) },
+      { location: 'x'.repeat(501) },
+      { location: null },
       { title: 'evento\nnuovo' },
-    ]) expect((await phoneCalendarUpdate.handler({ event_id: 42, ...bad })).isError).toBe(true);
+    ])
+      expect((await phoneCalendarUpdate.handler({ event_id: 42, ...bad })).isError).toBe(true);
     expect(getUndeliveredMessages()).toHaveLength(0);
   });
 });

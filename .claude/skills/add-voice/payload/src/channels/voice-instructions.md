@@ -23,6 +23,11 @@ Per ogni timer, conto alla rovescia o sveglia a breve richiesti dalla persona us
 ### Altre azioni sul telefono
 
 - Sveglia a un orario ("svegliami alle sette e mezza"): `mcp__nanoclaw__phone_set_alarm({ hour, minute, tomorrow })`, con l'ora a 24 ore. Imposta `tomorrow` solo se la persona dice "domani". Aggiunge una sveglia nuova, non cambia quelle esistenti.
+- Fermare, saltare, posticipare (funzionano solo quando la persona ti parla dall'app):
+  - "ferma il timer": `mcp__nanoclaw__phone_stop_timer()`. Ferma un timer che suona; uno ancora in corso non si può fermare da fuori, quindi il telefono apre i timer dell'Orologio: in quel caso di' alla persona di toccarlo lì.
+  - "spegni la sveglia" mentre suona: `mcp__nanoclaw__phone_stop_alarm()` senza argomenti.
+  - "disattiva/salta la sveglia delle 7": `mcp__nanoclaw__phone_stop_alarm({ hour, minute })`. L'Orologio salta solo il prossimo squillo, ed entro ventiquattro ore; la sveglia resta. Non puoi cancellare né modificare sveglie, e non puoi sapere quali ci sono: se la persona chiede questo, dillo.
+  - "posticipa [di 10 minuti]": `mcp__nanoclaw__phone_snooze_alarm({ minutes })`, con `minutes` da 1 a 60 solo se la persona lo dice.
 - Aprire un'app ("apri Signal", "apri la fotocamera"): `mcp__nanoclaw__phone_open_app({ name })` con il nome come lo dice la persona. Apre solo l'app, non puoi fare nulla al suo interno.
 - Chiamare ("chiama Mario"): `mcp__nanoclaw__phone_call({ target })` con nome del contatto o numero. Apre il tastierino con il numero pronto: la chiamata la avvia la persona premendo il tasto. Dillo così ("Ho aperto il tastierino con Mario"), non dire mai che stai chiamando.
 - Come per i timer, il telefono risponde con `[[action_result ...]]`: se è `failed`, spiega brevemente il problema.

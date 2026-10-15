@@ -169,6 +169,50 @@ export const phoneSetAlarm: McpToolDefinition = {
   },
 };
 
+export const phoneStopTimer = voiceTool(
+  'stop_timer',
+  "Stop a timer that is ringing on the user's phone. A timer still counting down cannot be stopped by another " +
+    "app (Android does not allow it): the phone then opens the Clock app's timers so the person can stop it.",
+  {},
+  [],
+  () => ({}),
+);
+
+export const phoneStopAlarm = voiceTool(
+  'stop_alarm',
+  "Without a time: silence the alarm ringing now on the user's phone. With hour (and minute): ask the Clock app " +
+    'to skip the next ring of the alarm set at that time, which it only does within the next 24 hours; the alarm ' +
+    'itself stays. Nothing deletes an alarm.',
+  {
+    hour: { type: 'integer', minimum: 0, maximum: 23, description: 'Hour of the alarm to skip, 24-hour clock.' },
+    minute: { type: 'integer', minimum: 0, maximum: 59, description: 'Minute of that alarm, default 0.' },
+  },
+  [],
+  (a) => {
+    if (a.hour === undefined) return a.minute === undefined ? {} : 'minute needs hour';
+    const minute = a.minute ?? 0;
+    if (typeof a.hour !== 'number' || !Number.isInteger(a.hour) || a.hour < 0 || a.hour > 23)
+      return 'hour must be an integer between 0 and 23';
+    if (typeof minute !== 'number' || !Number.isInteger(minute) || minute < 0 || minute > 59)
+      return 'minute must be an integer between 0 and 59';
+    return { hour: a.hour, minute };
+  },
+);
+
+export const phoneSnoozeAlarm = voiceTool(
+  'snooze_alarm',
+  "Snooze the alarm ringing now on the user's phone, for the Clock app's usual time or for the minutes asked.",
+  { minutes: { type: 'integer', minimum: 1, maximum: 60 } },
+  [],
+  (a) => {
+    if (a.minutes === undefined) return {};
+    const minutes = a.minutes;
+    return typeof minutes === 'number' && Number.isInteger(minutes) && minutes >= 1 && minutes <= 60
+      ? { minutes }
+      : 'minutes must be an integer between 1 and 60';
+  },
+);
+
 export const phoneOpenApp: McpToolDefinition = {
   tool: {
     name: 'phone_open_app',
@@ -605,6 +649,9 @@ export const phoneImageSearch = voiceTool(
 registerTools([
   phoneSetTimer,
   phoneSetAlarm,
+  phoneStopTimer,
+  phoneStopAlarm,
+  phoneSnoozeAlarm,
   phoneOpenApp,
   phoneCall,
   voiceWorking,
