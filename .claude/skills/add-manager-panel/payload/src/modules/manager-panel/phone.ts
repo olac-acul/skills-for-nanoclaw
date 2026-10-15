@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { readEnvKeys, updateEnvKeys } from './env-file.js';
+import { qrMatrix, type QrMatrix } from './qr.js';
 
 export interface PhoneStatus {
   /** The voice channel is part of this install (the `add-voice` skill). */
@@ -35,6 +36,17 @@ export interface PhoneStatus {
   agent: string | null;
   /** The setting and the running channel disagree: a restart is needed. */
   restartNeeded: boolean;
+  /** When an app last paired with a code, and which device it said it was. */
+  pairedAt: string | null;
+  pairedDevice: string | null;
+  /** A pairing code is waiting to be used. */
+  pairingPending: boolean;
+}
+
+export interface PairingStart {
+  /** The QR code to draw. Everything the code holds is in it: it is shown once, to the person who asked. */
+  matrix: QrMatrix;
+  expiresAt: string;
 }
 
 export interface PhonePort {
@@ -43,11 +55,15 @@ export interface PhonePort {
   newToken(): Promise<string>;
   /** Turn the channel on or off in `.env`; it takes effect when NanoClaw starts. Needs a token to turn on. */
   setEnabled(enabled: boolean): Promise<void>;
+  /** Leave a one-time pairing code for the voice channel and return the QR code that carries it. */
+  startPairing(): Promise<PairingStart>;
+  /** Cancel the waiting pairing code, if any. */
+  cancelPairing(): Promise<void>;
 }
 
 export class PhoneError extends Error {
   constructor(
-    readonly code: 'not_installed' | 'token_missing',
+    readonly code: 'not_installed' | 'token_missing' | 'no_address',
     message: string,
   ) {
     super(message);
@@ -58,6 +74,20 @@ export class PhoneError extends Error {
 /** The channel refuses tokens shorter than this. */
 export const MIN_TOKEN_LENGTH = 32;
 
+/** How long a pairing code works. The voice channel enforces it; this is what the file says. */
+export const PAIRING_TTL_MS = 5 * 60_000;
+const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // Crockford base32: no I, L, O, U
+
+/** 16 random characters of the pairing alphabet: 80 bits. */
+export function makePairingCode(randomBytes: (n: number) => Buffer = crypto.randomBytes): string {
+  return Array.from(randomBytes(16), (byte) => CODE_ALPHABET[byte & 31]).join('');
+}
+
+/** The text of the QR code (see "Abbinamento con un QR" in the app's protocol). */
+export function pairingLink(serverUrl: string, code: string): string {
+  return `nanovoice://pair?v=1&server=${encodeURIComponent(serverUrl)}&code=${code}`;
+}
+
 export const ENV_KEYS = ['VOICE_ENABLED', 'VOICE_AUTH_TOKEN', 'VOICE_BIND_HOST', 'VOICE_CHANNEL_PORT'] as const;
 
 export interface RecordedStatus {
@@ -65,6 +95,8 @@ export interface RecordedStatus {
   connected: boolean;
   connectedAt: string | null;
   lastDisconnectAt: string | null;
+  pairedAt: string | null;
+  pairedDevice: string | null;
   locale: string | null;
 }
 
@@ -87,6 +119,11 @@ export function readRecordedStatus(file: string): RecordedStatus | null {
     connected: data.connected === true,
     connectedAt: stamp(data.connectedAt),
     lastDisconnectAt: stamp(data.lastDisconnectAt),
+    pairedAt: stamp(data.pairedAt),
+    pairedDevice:
+      typeof data.pairedDevice === 'string' && /^[\p{L}\p{N} ._-]{1,40}$/u.test(data.pairedDevice)
+        ? data.pairedDevice
+        : null,
     locale: typeof data.locale === 'string' && /^[A-Za-z0-9_-]{1,20}$/.test(data.locale) ? data.locale : null,
   };
 }
@@ -108,11 +145,25 @@ export interface PhoneOptions {
   installed(): boolean;
   /** Names of the agents the voice channel is wired to. */
   wiredAgents(): Promise<string[]>;
+  now?: () => number;
+  /** Replaced in tests. */
+  matrix?: (text: string) => QrMatrix;
 }
 
 export function createPhonePort(options: PhoneOptions): PhonePort {
   const envFile = path.join(options.projectRoot, '.env');
   const dataDir = path.join(options.projectRoot, 'data');
+  const pairingFile = path.join(dataDir, 'voice-pairing.json');
+  const now = options.now ?? Date.now;
+  const pairingPending = (): boolean => {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(pairingFile, 'utf8')) as { expiresAt?: unknown };
+      return typeof parsed.expiresAt === 'string' && Date.parse(parsed.expiresAt) > now();
+      // eslint-disable-next-line no-catch-all/no-catch-all -- no file, or a damaged one: nothing is waiting
+    } catch {
+      return false;
+    }
+  };
 
   return {
     async status() {
@@ -139,6 +190,9 @@ export function createPhonePort(options: PhoneOptions): PhonePort {
         agent: agents[0] ?? null,
         // On in the file but not running, or running but switched off in the file.
         restartNeeded: installed && enabled !== (recorded?.listening === true),
+        pairedAt: recorded?.pairedAt ?? null,
+        pairedDevice: recorded?.pairedDevice ?? null,
+        pairingPending: pairingPending(),
       };
     },
 
@@ -156,6 +210,32 @@ export function createPhonePort(options: PhoneOptions): PhonePort {
       if (enabled && (readEnvKeys(envFile, ['VOICE_AUTH_TOKEN']).VOICE_AUTH_TOKEN ?? '').length < MIN_TOKEN_LENGTH)
         throw new PhoneError('token_missing', 'make a token first');
       updateEnvKeys(envFile, { VOICE_ENABLED: enabled ? 'true' : 'false' });
+    },
+
+    async startPairing() {
+      if (!options.installed()) throw new PhoneError('not_installed', 'the voice channel is not installed');
+      const env = readEnvKeys(envFile, ENV_KEYS);
+      if ((env.VOICE_AUTH_TOKEN ?? '').length < MIN_TOKEN_LENGTH)
+        throw new PhoneError('token_missing', 'make a token first');
+      const port = Number(env.VOICE_CHANNEL_PORT ?? '8767');
+      const address = addressFor(env.VOICE_BIND_HOST ?? '127.0.0.1', Number.isInteger(port) ? port : 8767);
+      if (!address.url) throw new PhoneError('no_address', 'the channel has no address the phone can use');
+      const code = makePairingCode();
+      const expiresAt = new Date(now() + PAIRING_TTL_MS).toISOString();
+      fs.mkdirSync(dataDir, { recursive: true });
+      const temp = `${pairingFile}.tmp`;
+      // Only the code's hash is kept; the code itself lives in the QR code that is about to be shown.
+      fs.writeFileSync(
+        temp,
+        JSON.stringify({ hash: crypto.createHash('sha256').update(code).digest('hex'), expiresAt, attempts: 0 }),
+        { mode: 0o600 },
+      );
+      fs.renameSync(temp, pairingFile);
+      return { matrix: (options.matrix ?? qrMatrix)(pairingLink(address.url, code)), expiresAt };
+    },
+
+    async cancelPairing() {
+      fs.rmSync(pairingFile, { force: true });
     },
   };
 }

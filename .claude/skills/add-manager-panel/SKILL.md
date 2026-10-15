@@ -64,6 +64,7 @@ payload/src/modules/manager-panel/password.ts -> src/modules/manager-panel/passw
 payload/src/modules/manager-panel/phone.test.ts -> src/modules/manager-panel/phone.test.ts
 payload/src/modules/manager-panel/phone.ts -> src/modules/manager-panel/phone.ts
 payload/src/modules/manager-panel/primitives.test.ts -> src/modules/manager-panel/primitives.test.ts
+payload/src/modules/manager-panel/qr.ts -> src/modules/manager-panel/qr.ts
 payload/src/modules/manager-panel/routes.ts -> src/modules/manager-panel/routes.ts
 payload/src/modules/manager-panel/server.test.ts -> src/modules/manager-panel/server.test.ts
 payload/src/modules/manager-panel/server.ts -> src/modules/manager-panel/server.ts
@@ -75,6 +76,14 @@ payload/src/modules/manager-panel/upstream-backend.test.ts -> src/modules/manage
 payload/src/modules/manager-panel/upstream-backend.ts -> src/modules/manager-panel/upstream-backend.ts
 payload/src/modules/manager-panel/validate.ts -> src/modules/manager-panel/validate.ts
 payload/src/modules/manager-panel/wiring.test.ts -> src/modules/manager-panel/wiring.test.ts
+```
+
+The QR code of the phone-pairing page is made on the server with the `qrcode` library, pinned to the same version
+as upstream's other skills:
+
+```nc:dep
+qrcode@1.5.4
+@types/qrcode@1.5.6
 ```
 
 Append the module to the host's module list. This is the only edit to an

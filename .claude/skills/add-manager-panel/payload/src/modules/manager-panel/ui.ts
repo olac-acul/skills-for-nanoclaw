@@ -141,6 +141,7 @@ header a.help { margin-left: auto; }
 .guide hr { border: 0; border-top: 1px solid var(--line); margin: 28px 0; }
 @media (max-width: 820px) { .guide-wrap { grid-template-columns: 1fr; } .guide-toc { position: static; max-height: none; } }
 code, .key { font-family: ui-monospace, monospace; word-break: break-all; }
+.qr-box { display: grid; place-items: center; margin: 12px 0; } .qr { max-width: 100%; height: auto; border-radius: 8px; image-rendering: pixelated; }
 .key { display: block; padding: 10px; background: var(--bg); border: 1px dashed var(--line); border-radius: 6px; margin: 8px 0; user-select: all; }
 
 /* desktop polish: calmer type, softer surfaces, clear focus */
@@ -295,6 +296,9 @@ var T = {
     token: 'Token', tokenSet: 'Set', tokenMissing: 'Not set', newToken: 'Make a new token', confirmToken: 'Make a new token? The app is disconnected and has to be given the new one.',
     tokenTitle: 'Give this token to the app', tokenBody: 'This token lets the phone in. It is shown only now and is not kept anywhere you can read it again. Enter it in the app (Settings, NanoClaw server), then close this window.', tokenSaved: 'I have entered it in the app',
     turnOn: 'Turn the channel on', turnOff: 'Turn the channel off', changed: 'Saved. Restart NanoClaw for it to take effect.',
+    paired: 'Last paired', pair: 'Pair the app with a QR code', pairNeedsChannel: 'Pairing needs the channel running, with a token and an address for the phone.',
+    pairTitle: 'Scan this code with the app', pairBody: 'In NanoVoice open Settings, NanoClaw server, and scan this code. It works once, for five minutes, and does not contain the token.', pairLeft: 'Time left',
+    pairDone: 'The app is paired.', pairExpired: 'The code expired. Make a new one if you still need it.',
   },
   backups: {
     title: 'Backups', create: 'Create backup', created: 'Created', size: 'Size', release: 'Release', consistency: 'Consistency', actions: 'Actions',
@@ -757,6 +761,32 @@ function viewPhone() {
       return h('div', {}, h('h1', {}, T.phone.tokenTitle), h('p', {}, T.phone.tokenBody), h('code', { class: 'key' }, token), h('label', { class: 'row' }, saved, T.phone.tokenSaved), h('div', { class: 'row' }, done));
     });
   }
+  // A QR code drawn on a canvas from rows of 0 and 1: nothing is built from markup. White with a quiet border, so any camera reads it.
+  function drawQr(canvas, m) {
+    var quiet = 4; var scale = Math.max(3, Math.floor(300 / (m.size + 2 * quiet))); var px = (m.size + 2 * quiet) * scale;
+    canvas.width = px; canvas.height = px;
+    var ctx = canvas.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, px, px); ctx.fillStyle = '#000000';
+    for (var y = 0; y < m.size; y++) for (var x = 0; x < m.size; x++) if (m.rows[y].charAt(x) === '1') ctx.fillRect((x + quiet) * scale, (y + quiet) * scale, scale, scale);
+  }
+  function showPairing(started, pairedBefore) {
+    var canvas = h('canvas', { class: 'qr', role: 'img', 'aria-label': T.phone.pairTitle }); var status = h('p', { class: 'muted', role: 'status' });
+    var close = null; var timer = null; var finished = false; var until = Date.parse(started.expires_at);
+    function stop(text) { finished = true; clearInterval(timer); clear(status); status.appendChild(document.createTextNode(text)); }
+    function tick() {
+      if (finished) return;
+      var left = Math.max(0, Math.round((until - Date.now()) / 1000));
+      if (left === 0) return stop(T.phone.pairExpired);
+      clear(status); status.appendChild(document.createTextNode(T.phone.pairLeft + ': ' + Math.floor(left / 60) + ':' + (left % 60 < 10 ? '0' : '') + (left % 60)));
+      if (left % 2 === 0) api('GET', '/phone').then(function (p) { if (!finished && p.paired_at && p.paired_at !== pairedBefore) { stop(T.phone.pairDone); setTimeout(function () { if (close) close(); }, 1500); } }).catch(function () {});
+    }
+    dialog(function (c) {
+      close = c; drawQr(canvas, started.matrix); timer = setInterval(tick, 1000); tick();
+      var cancel = h('button', { type: 'button', onclick: c }, T.close);
+      return h('div', {}, h('h1', {}, T.phone.pairTitle), h('p', {}, T.phone.pairBody), h('div', { class: 'qr-box' }, canvas), status, h('div', { class: 'row' }, cancel));
+    });
+    var d = document.getElementById('dialog');
+    d.addEventListener('close', function onClose() { d.removeEventListener('close', onClose); finished = true; clearInterval(timer); api('DELETE', '/phone/pairing').catch(function () {}); load(); });
+  }
   function load() {
     api('GET', '/phone').then(function (s) {
       clear(box);
@@ -771,6 +801,7 @@ function viewPhone() {
       box.appendChild(row(T.phone.agent, s.agent || h('span', {}, T.phone.notWired, ' ', guide('the-phone-app', T.phone.help))));
       box.appendChild(row(T.phone.push, chip(s.push_registered, T.phone.pushYes, T.phone.pushNo)));
       box.appendChild(row(T.phone.token, chip(s.token_set, T.phone.tokenSet, T.phone.tokenMissing)));
+      if (s.paired_at) box.appendChild(row(T.phone.paired, fmtDate(s.paired_at) + (s.paired_device ? ' (' + s.paired_device + ')' : '')));
       var tokenBtn = h('button', { type: 'button' }, T.phone.newToken);
       tokenBtn.onclick = function () {
         if (s.token_set && s.connected && !window.confirm(T.phone.confirmToken)) return;
@@ -784,7 +815,15 @@ function viewPhone() {
         ensureReauth().then(function () { return api('POST', '/phone/enabled', { enabled: !s.enabled }); }).then(function () { out.appendChild(message('ok', T.phone.changed)); load(); })
           .catch(function (err) { switchBtn.disabled = false; fail(out, err); });
       };
-      box.appendChild(h('div', { class: 'row' }, tokenBtn, switchBtn));
+      var canPair = s.listening && s.token_set && !!s.url;
+      var pairBtn = h('button', { type: 'button', class: 'primary', disabled: !canPair }, T.phone.pair);
+      pairBtn.onclick = function () {
+        clear(out); pairBtn.disabled = true;
+        ensureReauth().then(function () { return api('POST', '/phone/pairing', {}); }).then(function (r) { pairBtn.disabled = false; showPairing(r, s.paired_at); })
+          .catch(function (err) { pairBtn.disabled = false; fail(out, err); });
+      };
+      box.appendChild(h('div', { class: 'row' }, pairBtn, tokenBtn, switchBtn));
+      if (!canPair) box.appendChild(h('p', { class: 'hint' }, T.phone.pairNeedsChannel));
     }).catch(function (err) { clear(box); fail(box, err); });
   }
   load();

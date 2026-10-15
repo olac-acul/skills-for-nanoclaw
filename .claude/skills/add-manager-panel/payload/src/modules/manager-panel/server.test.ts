@@ -649,6 +649,23 @@ describe('model settings', () => {
     expect(JSON.stringify((await call('GET', '/api/v1/phone', login)).body)).not.toContain('fake-token');
   });
 
+  it('shows the pairing QR code only after the password is confirmed, once, and cancels it', async () => {
+    const login = await setupAdmin();
+    expect((await call('POST', '/api/v1/phone/pairing', { ...login, body: {} })).body.error.code).toBe(
+      'reauth_required',
+    );
+    expect(backend.pairingCalls).toEqual([]);
+    await reauth(login);
+    const res = await call('POST', '/api/v1/phone/pairing', { ...login, body: {} });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ matrix: { size: 2, rows: ['10', '01'] }, expires_at: '2026-10-02T12:05:00.000Z' });
+    expect((await call('GET', '/api/v1/phone', login)).body).toMatchObject({ pairing_pending: true, paired_at: null });
+    const cancelled = await call('DELETE', '/api/v1/phone/pairing', login);
+    expect(cancelled.status).toBe(200);
+    expect(backend.pairingCalls).toEqual(['start', 'cancel']);
+    expect((await call('GET', '/api/v1/phone', login)).body.pairing_pending).toBe(false);
+  });
+
   it('turns the voice channel on or off only after the password is confirmed, with a boolean, and says a restart is needed', async () => {
     const login = await setupAdmin();
     const body = { enabled: false };

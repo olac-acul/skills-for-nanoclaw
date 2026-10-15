@@ -31,6 +31,7 @@ export interface FakeBackend extends PanelBackend {
   phoneState: PhoneStatus;
   tokensMade: number;
   enabledCalls: boolean[];
+  pairingCalls: string[];
 }
 
 export function fakeBackend(dir: string): FakeBackend {
@@ -84,7 +85,11 @@ export function fakeBackend(dir: string): FakeBackend {
       pushRegistered: true,
       agent: 'Alpha',
       restartNeeded: false,
+      pairedAt: null,
+      pairedDevice: null,
+      pairingPending: false,
     },
+    pairingCalls: [],
     tokensMade: 0,
     enabledCalls: [],
     phone: {
@@ -98,6 +103,15 @@ export function fakeBackend(dir: string): FakeBackend {
         self.enabledCalls.push(enabled);
         self.phoneState.enabled = enabled;
         self.phoneState.restartNeeded = true;
+      },
+      async startPairing() {
+        self.pairingCalls.push('start');
+        self.phoneState.pairingPending = true;
+        return { matrix: { size: 2, rows: ['10', '01'] }, expiresAt: '2026-10-02T12:05:00.000Z' };
+      },
+      async cancelPairing() {
+        self.pairingCalls.push('cancel');
+        self.phoneState.pairingPending = false;
       },
     } satisfies PhonePort,
     bridgeAddress: () => '100.64.0.1',

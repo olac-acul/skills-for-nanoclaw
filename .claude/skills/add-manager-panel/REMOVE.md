@@ -49,6 +49,7 @@ src/modules/manager-panel/password.ts
 src/modules/manager-panel/phone.test.ts
 src/modules/manager-panel/phone.ts
 src/modules/manager-panel/primitives.test.ts
+src/modules/manager-panel/qr.ts
 src/modules/manager-panel/routes.ts
 src/modules/manager-panel/server.test.ts
 src/modules/manager-panel/server.ts

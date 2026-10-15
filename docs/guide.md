@@ -683,6 +683,12 @@ network the phone reaches, never every address of a machine that faces the inter
   the page says so instead and tells you what to change (`VOICE_BIND_HOST`).
 - **Answers from agent** is the agent the channel is wired to. It says so when there is none yet.
 - **Wake-up push** says whether the app has registered a place where the server can wake it when it is off.
+- **Pair the app with a QR code** (after you confirm your password) shows a code that the NanoVoice app scans from
+  Settings, NanoClaw server: it fills in the address and token for you. The code is **not the token**: it is a
+  one-time pairing code that works for five minutes, for one app, and the server keeps only its hash. Five wrong tries
+  cancel it, and making another cancels the first. The page closes the code by itself when the app has paired, and
+  shows when and which phone paired last. Pairing needs the channel to be running, a token and an address the phone
+  can reach (see **Address for the app**).
 - **Make a new token** creates a new token, stores it and shows it **once**; nobody can read it again afterwards, here
   or anywhere else in the panel. Use it when you first set up, when the token may have leaked, or when you lose a
   phone. It ends the app's current connection at once (the channel checks the token at every login and notices when
@@ -695,7 +701,9 @@ network the phone reaches, never every address of a machine that faces the inter
 The token is a password for the agent and for the phone's actions: anyone who has it can talk to the agent the
 channel is wired to, with that agent's memory and tools. A plain `ws://` address sends the token in clear text, which is
 why the app accepts it only on a private network with a VPN up; elsewhere use a TLS proxy and `wss://`. The status the
-channel shares with the panel (`data/voice-status.json`) holds no secret.
+channel shares with the panel (`data/voice-status.json`) holds no secret. The pairing code is exchanged with `POST /pair` on
+the voice channel's own address, over the same transport as the rest (plain `ws://`/`http://` only on a private network
+or VPN), and a refusal looks the same whether the code was wrong, expired or never made.
 
 ## Terminal-only tasks
 
@@ -919,6 +927,7 @@ State-changing calls need the cookie, the `X-CSRF-Token` header and an `Origin` 
 | `POST`, `GET`, `DELETE /credentials/chatgpt/login` | start: yes | ChatGPT device sign-in: start, poll for page and code, cancel |
 | `GET /phone` | no | the phone app's state: connection, address, whether a token is set (never the token) |
 | `POST /phone/token` | yes | make a new token; it is returned once |
+| `POST /phone/pairing`, `DELETE /phone/pairing` | start: yes | make the pairing QR code (returned once, as rows of 0 and 1) or cancel the waiting one |
 | `POST /phone/enabled` | yes | turn the voice channel on or off (`{"enabled": true}`); takes effect at the next start |
 | `GET /backups` | no | list |
 | `POST /backups` | yes | start a backup in the background (`202`); `force` is ignored |

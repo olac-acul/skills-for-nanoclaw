@@ -52,6 +52,13 @@ describe('the served browser script', () => {
     expect(APP_JS).toContain("api('POST', '/phone/token'");
     expect(APP_JS).toContain("api('POST', '/phone/enabled'");
     expect(APP_JS).toContain('T.phone.tokenTitle');
+    expect(APP_JS).toContain("api('POST', '/phone/pairing'");
+    expect(APP_JS).toContain("api('DELETE', '/phone/pairing'");
+  });
+
+  it('draws the pairing QR code on a canvas from rows of 0 and 1, never from markup', () => {
+    expect(APP_JS).toContain("getContext('2d')");
+    expect(APP_JS).toContain('fillRect');
   });
 
   it('lets a phone save the page to its home screen', () => {

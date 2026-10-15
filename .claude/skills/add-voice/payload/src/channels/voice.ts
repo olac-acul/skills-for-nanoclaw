@@ -15,7 +15,7 @@
  * phone tools (mcp-tools/phone.ts), and only for a live exchange; `[[action:...]]` or `[[working]]` written in text is
  * stripped, never run. The phone's `action_result` goes back to the agent as data of that exchange, quoted.
  */
-import { timingSafeEqual } from 'crypto';
+import { createHash, timingSafeEqual } from 'crypto';
 import { lookup } from 'dns/promises';
 import fs from 'fs';
 import http from 'http';
@@ -63,6 +63,12 @@ const MAX_TRACKED = 200;
 export const MIN_TOKEN_LENGTH = 32;
 /** Failed logins from one address before it is refused for FAILED_LOGIN_WINDOW_MS. */
 const MAX_FAILED_LOGINS = 10;
+/** The pairing request body: a code and a device name. */
+const PAIR_MAX_BODY_BYTES = 1024;
+/** Wrong codes before the pending pairing code is cancelled. */
+const PAIR_MAX_ATTEMPTS = 5;
+/** 16 characters of Crockford base32 (no I, L, O, U): 80 random bits. */
+const PAIR_CODE = /^[0-9A-HJKMNP-TV-Z]{16}$/;
 const FAILED_LOGIN_WINDOW_MS = 10 * 60_000;
 
 /** Single-operator transport wired manually: every line is for the agent, no threads or mentions. */
@@ -85,6 +91,11 @@ export interface VoiceAdapterOptions {
   platformId: string;
   /** Where the connection state is written for the manager panel (no secrets in it); null writes nothing. */
   statusPath?: string | null;
+  /**
+   * Where the manager panel leaves a pairing code's SHA-256 (see docs/PROTOCOL.md of the app, "Abbinamento con un QR");
+   * null turns pairing off.
+   */
+  pairingPath?: string | null;
   /** Quiet period after the last delivered message before `done` is sent. */
   doneDelayMs?: number;
   /**
@@ -114,6 +125,26 @@ export interface VoiceAdapterOptions {
 }
 
 export type VoiceAdapter = ChannelAdapter & { port(): number };
+
+/** A pairing code as it is compared: upper case, without spaces or hyphens. */
+export function canonicalPairingCode(raw: string): string {
+  return raw.toUpperCase().replace(/[\s-]/g, '');
+}
+
+/** What is kept of a pairing code: its SHA-256 in hex. */
+export function hashPairingCode(raw: string): string {
+  return createHash('sha256').update(canonicalPairingCode(raw)).digest('hex');
+}
+
+/** The device name the app gives, cut down to letters, digits and a few signs: it is shown in the panel. */
+export function cleanDeviceName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const clean = raw
+    .replace(/[^\p{L}\p{N} ._-]/gu, '')
+    .trim()
+    .slice(0, 40);
+  return clean || null;
+}
 
 /** What one outbound message asks of the phone. */
 export interface VoiceOutbound {
@@ -384,6 +415,8 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
   let clientLocale: string | undefined;
   let connectedAt: string | null = null;
   let disconnectedAt: string | null = null;
+  let pairedAt: string | null = null;
+  let pairedDevice: string | null = null;
 
   let client: WebSocket | null = null;
   let capabilities: Set<string> | null = null; // null until the client's hello
@@ -655,6 +688,109 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
     closeAll();
   }
 
+  function readPairing(): { hash: string; expiresAt: number; attempts: number } | null {
+    if (!opts.pairingPath) return null;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(opts.pairingPath, 'utf8')) as Record<string, unknown>;
+      const expiresAt = typeof parsed.expiresAt === 'string' ? Date.parse(parsed.expiresAt) : NaN;
+      if (typeof parsed.hash !== 'string' || !/^[0-9a-f]{64}$/.test(parsed.hash) || !Number.isFinite(expiresAt))
+        return null;
+      const attempts = typeof parsed.attempts === 'number' && Number.isInteger(parsed.attempts) ? parsed.attempts : 0;
+      return { hash: parsed.hash, expiresAt, attempts };
+      // eslint-disable-next-line no-catch-all/no-catch-all -- a missing or damaged file means there is no pairing to answer
+    } catch {
+      return null;
+    }
+  }
+
+  function dropPairing(): void {
+    if (opts.pairingPath) fs.rmSync(opts.pairingPath, { force: true });
+  }
+
+  function replyJson(res: http.ServerResponse, status: number, body: unknown): void {
+    if (res.headersSent) return;
+    res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(JSON.stringify(body));
+  }
+
+  /** `POST /pair`: the app trades a pairing code for the token. Every refusal looks the same from outside. */
+  function handlePair(req: http.IncomingMessage, res: http.ServerResponse): void {
+    const address = req.socket.remoteAddress ?? 'unknown';
+    if (loginRefused(address)) return replyJson(res, 429, { error: 'too_many_attempts' });
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const timer = setTimeout(() => req.destroy(), 5000);
+    timer.unref();
+    req.on('error', () => clearTimeout(timer));
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > PAIR_MAX_BODY_BYTES) {
+        clearTimeout(timer);
+        if (!res.headersSent) {
+          // The rest of the body is not read: the connection is closed once the answer has gone out.
+          res.once('finish', () => req.socket.destroy());
+          res.writeHead(413, { 'content-type': 'application/json', 'cache-control': 'no-store', connection: 'close' });
+          res.end(JSON.stringify({ error: 'bad_request' }));
+        }
+      } else chunks.push(chunk);
+    });
+    req.on('end', () => {
+      clearTimeout(timer);
+      if (res.headersSent) return;
+      let body: Record<string, unknown>;
+      try {
+        const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+        body = parsed as Record<string, unknown>;
+      } catch {
+        return replyJson(res, 400, { error: 'bad_request' });
+      }
+      if (typeof body.code !== 'string' || body.code.length > 64) return replyJson(res, 400, { error: 'bad_request' });
+
+      const refuse = (): void => {
+        noteFailedLogin(address);
+        replyJson(res, 401, { error: 'invalid_code' });
+      };
+      const pending = readPairing();
+      if (!pending || pending.expiresAt <= Date.now()) {
+        if (pending) dropPairing();
+        return refuse();
+      }
+      const code = canonicalPairingCode(body.code);
+      const matches =
+        PAIR_CODE.test(code) &&
+        timingSafeEqual(Buffer.from(hashPairingCode(code), 'hex'), Buffer.from(pending.hash, 'hex'));
+      if (!matches) {
+        if (pending.attempts + 1 >= PAIR_MAX_ATTEMPTS) dropPairing();
+        else {
+          try {
+            fs.writeFileSync(
+              opts.pairingPath!,
+              JSON.stringify({
+                ...pending,
+                expiresAt: new Date(pending.expiresAt).toISOString(),
+                attempts: pending.attempts + 1,
+              }),
+              { mode: 0o600 },
+            );
+            // eslint-disable-next-line no-catch-all/no-catch-all -- failing to count an attempt must not give one away
+          } catch {
+            dropPairing();
+          }
+        }
+        return refuse();
+      }
+      // Used once: the code is gone before the answer is sent.
+      dropPairing();
+      failedLogins.delete(address);
+      pairedAt = new Date().toISOString();
+      pairedDevice = cleanDeviceName(body.device);
+      log.info('Voice app paired', { device: pairedDevice ?? undefined, address });
+      writeStatus(true);
+      replyJson(res, 200, { token: currentToken() });
+    });
+  }
+
   /** The token a login is checked against now. */
   function currentToken(): string {
     const fresh = opts.readToken?.();
@@ -675,6 +811,8 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
           connected: !!client && !!capabilities,
           connectedAt: client && capabilities ? connectedAt : null,
           lastDisconnectAt: disconnectedAt,
+          pairedAt,
+          pairedDevice,
           locale: client && capabilities ? (clientLocale ?? null) : null,
           capabilities: client && capabilities ? capabilities.size : 0,
           updatedAt: new Date().toISOString(),
@@ -746,7 +884,10 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
 
     async setup(config: ChannelSetup): Promise<void> {
       setupConfig = config;
-      server = http.createServer((_req, res) => res.writeHead(404).end());
+      server = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/pair' && opts.pairingPath) return handlePair(req, res);
+        res.writeHead(404).end();
+      });
       wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
 
       server.on('upgrade', (req, socket, head) => {
@@ -928,6 +1069,7 @@ registerChannelAdapter('voice', {
       platformId: get('VOICE_PLATFORM_ID') || 'default',
       pushStatePath: path.join(DATA_DIR, 'voice-push.json'),
       statusPath: path.join(DATA_DIR, 'voice-status.json'),
+      pairingPath: path.join(DATA_DIR, 'voice-pairing.json'),
     });
   },
   defaults: VOICE_DEFAULTS,

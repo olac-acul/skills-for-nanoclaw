@@ -442,6 +442,9 @@ export function buildRoutes(): Route[] {
           push_registered: s.pushRegistered,
           agent: s.agent,
           restart_needed: s.restartNeeded,
+          paired_at: s.pairedAt,
+          paired_device: s.pairedDevice,
+          pairing_pending: s.pairingPending,
         },
       };
     },
@@ -458,6 +461,36 @@ export function buildRoutes(): Route[] {
     limit: 'mutation',
     parse: noBody,
     run: async (ctx) => ({ status: 200, body: { token: await ctx.deps.backend.phone.newToken() } }),
+  });
+
+  // The QR code for pairing the app: shown once, to the person who confirmed the password. No token in it.
+  add({
+    name: 'phone_pairing_start',
+    method: 'POST',
+    pattern: /^\/api\/v1\/phone\/pairing$/,
+    access: 'session',
+    mutating: true,
+    reauth: true,
+    limit: 'mutation',
+    parse: noBody,
+    run: async (ctx) => {
+      const started = await ctx.deps.backend.phone.startPairing();
+      return { status: 200, body: { matrix: started.matrix, expires_at: started.expiresAt } };
+    },
+  });
+
+  add({
+    name: 'phone_pairing_cancel',
+    method: 'DELETE',
+    pattern: /^\/api\/v1\/phone\/pairing$/,
+    access: 'session',
+    mutating: true,
+    limit: 'mutation',
+    parse: noBody,
+    run: async (ctx) => {
+      await ctx.deps.backend.phone.cancelPairing();
+      return { status: 200, body: {} };
+    },
   });
 
   add({

@@ -1,10 +1,20 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { PhoneError, addressFor, createPhonePort, readRecordedStatus, type PhoneOptions } from './phone.js';
+import {
+  PAIRING_TTL_MS,
+  PhoneError,
+  addressFor,
+  createPhonePort,
+  makePairingCode,
+  pairingLink,
+  readRecordedStatus,
+  type PhoneOptions,
+} from './phone.js';
 
 let root: string;
 beforeEach(() => {
@@ -45,8 +55,16 @@ describe('readRecordedStatus', () => {
       connected: true,
       connectedAt: '2026-10-02T12:00:00.000Z',
       lastDisconnectAt: null,
+      pairedAt: null,
+      pairedDevice: null,
       locale: 'it-IT',
     });
+  });
+  it('reads when and by which device the app paired, and drops a device name that is not plain', () => {
+    status({ pairedAt: '2026-10-02T12:00:00.000Z', pairedDevice: 'Pixel 8' });
+    expect(readRecordedStatus(file())).toMatchObject({ pairedAt: '2026-10-02T12:00:00.000Z', pairedDevice: 'Pixel 8' });
+    status({ pairedAt: '2026-10-02T12:00:00.000Z', pairedDevice: '<b>x</b>' });
+    expect(readRecordedStatus(file())?.pairedDevice).toBeNull();
   });
   it('treats a missing, damaged or odd file as no status, and drops values of the wrong shape', () => {
     expect(readRecordedStatus(file())).toBeNull();
@@ -60,6 +78,8 @@ describe('readRecordedStatus', () => {
       connected: false,
       connectedAt: null,
       lastDisconnectAt: null,
+      pairedAt: null,
+      pairedDevice: null,
       locale: null,
     });
   });
@@ -90,6 +110,9 @@ describe('the phone port', () => {
       pushRegistered: true,
       agent: 'Alpha',
       restartNeeded: false,
+      pairedAt: null,
+      pairedDevice: null,
+      pairingPending: false,
     });
   });
 
@@ -149,5 +172,85 @@ describe('the phone port', () => {
     await expect(off.newToken()).rejects.toBeInstanceOf(PhoneError);
     await expect(off.setEnabled(false)).rejects.toMatchObject({ code: 'not_installed' });
     expect(readEnv()).toBe('\n');
+  });
+});
+
+describe('pairing', () => {
+  const pairingFile = () => path.join(root, 'data', 'voice-pairing.json');
+  const ready = () => env([`VOICE_ENABLED=true`, `VOICE_AUTH_TOKEN=${TOKEN}`, 'VOICE_BIND_HOST=100.64.0.9']);
+
+  it('makes a code from the pairing alphabet, different each time', () => {
+    const code = makePairingCode();
+    expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{16}$/);
+    expect(makePairingCode()).not.toBe(code);
+    expect(makePairingCode(() => Buffer.alloc(16, 0xff))).toBe('Z'.repeat(16));
+  });
+
+  it('writes the link as the protocol says, with the address encoded', () => {
+    expect(pairingLink('ws://100.64.0.9:8767', '7H2KQ9M4XB5TD3WE')).toBe(
+      'nanovoice://pair?v=1&server=ws%3A%2F%2F100.64.0.9%3A8767&code=7H2KQ9M4XB5TD3WE',
+    );
+  });
+
+  it('leaves only the hash of the code on disk, with a five-minute life, and draws the whole link', async () => {
+    ready();
+    let drawn = '';
+    const now = Date.parse('2026-10-02T12:00:00.000Z');
+    const started = await port({
+      now: () => now,
+      matrix: (text) => ((drawn = text), { size: 1, rows: ['1'] }),
+    }).startPairing();
+    expect(started).toEqual({
+      matrix: { size: 1, rows: ['1'] },
+      expiresAt: new Date(now + PAIRING_TTL_MS).toISOString(),
+    });
+    const code = /code=([0-9A-Z]{16})$/.exec(drawn)![1];
+    expect(drawn.startsWith('nanovoice://pair?v=1&server=ws%3A%2F%2F100.64.0.9%3A8767&code=')).toBe(true);
+    const stored = fs.readFileSync(pairingFile(), 'utf8');
+    expect(stored).not.toContain(code);
+    expect(stored).not.toContain(TOKEN);
+    expect(JSON.parse(stored)).toEqual({
+      hash: crypto.createHash('sha256').update(code).digest('hex'),
+      expiresAt: new Date(now + PAIRING_TTL_MS).toISOString(),
+      attempts: 0,
+    });
+    expect(fs.statSync(pairingFile()).mode & 0o077).toBe(0);
+  });
+
+  it('replaces a waiting code with a new one, and reports it as pending until it expires or is cancelled', async () => {
+    ready();
+    let now = Date.parse('2026-10-02T12:00:00.000Z');
+    const p = port({ now: () => now, matrix: () => ({ size: 1, rows: ['1'] }) });
+    await p.startPairing();
+    const first = fs.readFileSync(pairingFile(), 'utf8');
+    await p.startPairing();
+    expect(fs.readFileSync(pairingFile(), 'utf8')).not.toBe(first);
+    expect((await p.status()).pairingPending).toBe(true);
+    now += PAIRING_TTL_MS + 1;
+    expect((await p.status()).pairingPending).toBe(false);
+    now -= PAIRING_TTL_MS;
+    expect((await p.status()).pairingPending).toBe(true);
+    await p.cancelPairing();
+    expect(fs.existsSync(pairingFile())).toBe(false);
+    expect((await p.status()).pairingPending).toBe(false);
+    await p.cancelPairing(); // nothing to cancel is not an error
+  });
+
+  it('refuses when there is no token, no usable address, or no voice channel, writing nothing', async () => {
+    env([`VOICE_AUTH_TOKEN=${TOKEN}`]); // the channel listens on this machine only
+    await expect(port().startPairing()).rejects.toMatchObject({ code: 'no_address' });
+    env(['VOICE_BIND_HOST=100.64.0.9']);
+    await expect(port().startPairing()).rejects.toMatchObject({ code: 'token_missing' });
+    ready();
+    await expect(port({ installed: () => false }).startPairing()).rejects.toMatchObject({ code: 'not_installed' });
+    expect(fs.existsSync(pairingFile())).toBe(false);
+  });
+
+  it('draws a real QR code for the link', async () => {
+    ready();
+    const started = await port().startPairing();
+    expect(started.matrix.size).toBeGreaterThan(20);
+    expect(started.matrix.rows).toHaveLength(started.matrix.size);
+    expect(started.matrix.rows.every((row) => /^[01]+$/.test(row) && row.length === started.matrix.size)).toBe(true);
   });
 });

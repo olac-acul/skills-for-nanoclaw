@@ -119,7 +119,7 @@ It registers the messaging group `voice:default`, wires it to the agent (one sha
 pnpm exec tsx scripts/voice-setup.ts pair
 ```
 
-prints the address and the token to enter in the app (Settings, NanoClaw server). Pass `--address <host>` when the phone reaches the machine under another name than the one it listens on.
+prints the address and the token to enter in the app (Settings, NanoClaw server). With the manager panel installed there is an easier way: its **Phone** page shows a QR code (after you confirm your password) that the app scans in Settings, NanoClaw server. The code is one-time and lasts five minutes; it is not the token. The voice channel answers the exchange on `POST /pair` at its own address (the code's hash is left by the panel in `data/voice-pairing.json`). Pass `--address <host>` when the phone reaches the machine under another name than the one it listens on.
 
 ## Verify
 

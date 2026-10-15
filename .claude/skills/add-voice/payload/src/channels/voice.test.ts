@@ -9,7 +9,10 @@ import { WebSocket } from 'ws';
 import type { ChannelSetup, InboundMessage } from './adapter.js';
 import {
   actionResultText,
+  canonicalPairingCode,
+  cleanDeviceName,
   createVoiceAdapter,
+  hashPairingCode,
   isPrivateAddress,
   readOutbound,
   stripMarkers,
@@ -888,5 +891,150 @@ describe('the connection state written for the panel', () => {
     const app = await connect(h);
     app.ws.send(hello());
     await until(() => app.ws.readyState === WebSocket.OPEN);
+  });
+});
+
+describe('pairing with a code', () => {
+  const CODE = '7H2KQ9M4XB5TD3WE';
+  const LONG = 't'.repeat(48);
+  let dir: string;
+  let pairingPath: string;
+  let statusPath: string;
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  async function pairing(extra: Partial<Parameters<typeof createVoiceAdapter>[0]> = {}) {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-pair-'));
+    pairingPath = path.join(dir, 'voice-pairing.json');
+    statusPath = path.join(dir, 'voice-status.json');
+    return start({ authToken: LONG, pairingPath, statusPath, ...extra });
+  }
+  const leave = (code = CODE, over: Record<string, unknown> = {}) =>
+    fs.writeFileSync(
+      pairingPath,
+      JSON.stringify({
+        hash: hashPairingCode(code),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        attempts: 0,
+        ...over,
+      }),
+    );
+  const post = (h: Harness, body: unknown, urlPath = '/pair', method = 'POST') =>
+    new Promise<{ status: number; body: Record<string, unknown> | null; text: string }>((resolve, reject) => {
+      const data = typeof body === 'string' ? body : JSON.stringify(body);
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port: h.adapter.port(),
+          path: urlPath,
+          method,
+          headers: { 'content-type': 'application/json' },
+        },
+        (res) => {
+          let text = '';
+          res.on('data', (c) => (text += c));
+          res.on('end', () => {
+            let parsed: Record<string, unknown> | null = null;
+            try {
+              parsed = JSON.parse(text);
+            } catch {
+              parsed = null;
+            }
+            resolve({ status: res.statusCode ?? 0, body: parsed, text });
+          });
+        },
+      );
+      req.on('error', reject);
+      req.end(data);
+    });
+
+  it('gives the token for the right code, once, and shows the device in the status', async () => {
+    const h = await pairing();
+    leave();
+    const ok = await post(h, { code: CODE, device: 'Pixel 8 <b>' });
+    expect(ok.status).toBe(200);
+    expect(ok.body).toEqual({ token: LONG });
+    expect(fs.existsSync(pairingPath)).toBe(false);
+    const status = JSON.parse(fs.readFileSync(statusPath, 'utf8')) as Record<string, unknown>;
+    expect(status.pairedDevice).toBe('Pixel 8 b');
+    expect(typeof status.pairedAt).toBe('string');
+    expect(fs.readFileSync(statusPath, 'utf8')).not.toContain(LONG);
+    expect((await post(h, { code: CODE })).status).toBe(401);
+  });
+
+  it('accepts the code in lower case and with hyphens or spaces', async () => {
+    const h = await pairing();
+    leave();
+    expect((await post(h, { code: '7h2k-q9m4 xb5t-d3we' })).status).toBe(200);
+  });
+
+  it('answers the same for a wrong, an expired and a missing code, and never says which', async () => {
+    const h = await pairing();
+    const refusals: string[] = [];
+    refusals.push((await post(h, { code: CODE })).text); // none made
+    leave();
+    refusals.push((await post(h, { code: 'AAAAAAAAAAAAAAAA' })).text);
+    leave(CODE, { expiresAt: new Date(Date.now() - 1000).toISOString() });
+    refusals.push((await post(h, { code: CODE })).text);
+    expect(new Set(refusals)).toEqual(new Set(['{"error":"invalid_code"}']));
+    expect(fs.existsSync(pairingPath)).toBe(false); // an expired code is removed
+  });
+
+  it('cancels the code after five wrong tries, even for the right one afterwards', async () => {
+    const h = await pairing();
+    leave();
+    for (let i = 0; i < 4; i++) expect((await post(h, { code: 'BBBBBBBBBBBBBBBB' })).status).toBe(401);
+    expect(JSON.parse(fs.readFileSync(pairingPath, 'utf8')).attempts).toBe(4);
+    expect((await post(h, { code: 'BBBBBBBBBBBBBBBB' })).status).toBe(401);
+    expect(fs.existsSync(pairingPath)).toBe(false);
+    expect((await post(h, { code: CODE })).status).toBe(401);
+  });
+
+  it('refuses an address that keeps trying, like a wrong token', async () => {
+    const h = await pairing();
+    for (let i = 0; i < 10; i++) {
+      leave();
+      await post(h, { code: 'CCCCCCCCCCCCCCCC' });
+    }
+    leave();
+    expect((await post(h, { code: CODE })).status).toBe(429);
+  });
+
+  it('refuses malformed and oversized requests and other paths and methods', async () => {
+    const h = await pairing();
+    leave();
+    expect((await post(h, 'not json')).status).toBe(400);
+    expect((await post(h, [])).status).toBe(400);
+    expect((await post(h, { code: 7 })).status).toBe(400);
+    expect((await post(h, { code: CODE, device: 'x'.repeat(5000) })).status).toBe(413);
+    expect((await post(h, { code: CODE }, '/other')).status).toBe(404);
+    expect((await post(h, '', '/pair', 'GET')).status).toBe(404);
+    expect((await post(h, { code: CODE })).status).toBe(200); // none of that used the code up
+  });
+
+  it('is off without a pairing path, and ignores a damaged file', async () => {
+    const h = await pairing({ pairingPath: null });
+    expect((await post(h, { code: CODE })).status).toBe(404);
+    const g = await pairing();
+    fs.writeFileSync(pairingPath, '{"hash": 3}');
+    expect((await post(g, { code: CODE })).status).toBe(401);
+  });
+
+  it('hands out the token in use now, after a rotation', async () => {
+    const NEXT = 'r'.repeat(48);
+    let current = LONG;
+    const h = await pairing({ readToken: () => current });
+    leave();
+    current = NEXT;
+    expect((await post(h, { code: CODE })).body).toEqual({ token: NEXT });
+  });
+
+  it('canonicalises codes and cleans device names', () => {
+    expect(canonicalPairingCode(' ab-cd ef ')).toBe('ABCDEF');
+    expect(hashPairingCode('ab-cd')).toBe(hashPairingCode('ABCD'));
+    expect(cleanDeviceName('Pixel 8')).toBe('Pixel 8');
+    expect(cleanDeviceName('<script>alert(1)</script>')).toBe('scriptalert1script');
+    expect(cleanDeviceName('')).toBeNull();
+    expect(cleanDeviceName(5)).toBeNull();
+    expect(cleanDeviceName('a'.repeat(100))).toHaveLength(40);
   });
 });
