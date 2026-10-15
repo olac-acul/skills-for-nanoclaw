@@ -827,6 +827,19 @@ Needs `jq` (upstream's tests use it). Everything runs with `umask 022`: some of 
 normal login has 002. A host started by hand (not as a service) is not restarted by upstream's updater: stop it
 before `cutover`; the command starts it again.
 
+**Only the skills changed** (NanoClaw has no newer release, so `prepare` says there is nothing to do): update this
+repository's checkout and apply them again.
+
+```bash
+cd ~/skills-for-nanoclaw && git pull
+node scripts/install-skills.mjs --install ~/nanoclaw
+```
+
+Skills already installed are refreshed (their files and dependencies replaced) and then checked, built and tested;
+the voice section of the agents' instructions is rewritten where it is in use; the new state is recorded and
+NanoClaw restarts, a few seconds without the assistant. If a test fails it stops before the restart, and the install
+keeps running the previous build: `git status` in the install shows what changed and `git checkout .` undoes it.
+
 ### Rebuilding agent images
 
 Agent groups can have a customised container image (extra packages). Images are not part of a backup.
