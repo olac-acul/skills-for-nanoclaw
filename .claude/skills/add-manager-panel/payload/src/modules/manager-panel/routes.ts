@@ -21,6 +21,7 @@ import {
   type ProviderInput,
 } from './model-settings.js';
 import { publicId, resolveId } from './opaque-id.js';
+import { PhoneError } from './phone.js';
 import type { Session } from './sessions.js';
 import type { PanelState } from './state.js';
 import { InvalidBody, fields, noBody } from './validate.js';
@@ -416,6 +417,66 @@ export function buildRoutes(): Route[] {
   });
 
   add({
+    name: 'phone_status',
+    method: 'GET',
+    pattern: /^\/api\/v1\/phone$/,
+    access: 'session',
+    mutating: false,
+    limit: 'read',
+    parse: noBody,
+    run: async (ctx) => {
+      const s = await ctx.deps.backend.phone.status();
+      return {
+        status: 200,
+        body: {
+          installed: s.installed,
+          enabled: s.enabled,
+          listening: s.listening,
+          connected: s.connected,
+          connected_at: s.connectedAt,
+          last_disconnect_at: s.lastDisconnectAt,
+          locale: s.locale,
+          url: s.url,
+          address_problem: s.addressProblem,
+          token_set: s.tokenSet,
+          push_registered: s.pushRegistered,
+          agent: s.agent,
+          restart_needed: s.restartNeeded,
+        },
+      };
+    },
+  });
+
+  // A new token is returned once and never read back; the app's current connection ends.
+  add({
+    name: 'phone_token',
+    method: 'POST',
+    pattern: /^\/api\/v1\/phone\/token$/,
+    access: 'session',
+    mutating: true,
+    reauth: true,
+    limit: 'mutation',
+    parse: noBody,
+    run: async (ctx) => ({ status: 200, body: { token: await ctx.deps.backend.phone.newToken() } }),
+  });
+
+  add({
+    name: 'phone_enabled',
+    method: 'POST',
+    pattern: /^\/api\/v1\/phone\/enabled$/,
+    access: 'session',
+    mutating: true,
+    reauth: true,
+    limit: 'mutation',
+    parse: (raw) => fields<{ enabled: boolean }>(raw, { enabled: { type: 'boolean' } }),
+    run: async (ctx) => {
+      const { enabled } = ctx.body as { enabled: boolean };
+      await ctx.deps.backend.phone.setEnabled(enabled);
+      return { status: 200, body: { enabled, restart_needed: true } };
+    },
+  });
+
+  add({
     name: 'credentials',
     method: 'GET',
     pattern: /^\/api\/v1\/credentials$/,
@@ -664,6 +725,7 @@ export function toHttpError(error: unknown): HttpError {
     );
   }
   if (error instanceof BackupJobError) return new HttpError(409, error.code);
+  if (error instanceof PhoneError) return new HttpError(409, error.code);
   if (error instanceof ModelSettingsError) {
     const status =
       error.code === 'invalid_input'

@@ -199,6 +199,7 @@ describe('request protections', () => {
       ['GET', '/api/v1/backups'],
       ['GET', '/api/v1/backups/job'],
       ['GET', '/api/v1/channels'],
+      ['GET', '/api/v1/phone'],
     ]) {
       expect((await call(method, route)).status, route).toBe(401);
     }
@@ -623,6 +624,41 @@ describe('model settings', () => {
     expect((await call('GET', '/api/v1/model', login)).body.images).toBe(true);
     const bad = await call('POST', '/api/v1/model/preflight', { ...login, body: { ...body, images: 'yes' } });
     expect(bad.status).toBe(400);
+  });
+
+  it('shows the phone app state without any secret, and makes a new token only after the password is confirmed again', async () => {
+    const login = await setupAdmin();
+    const state = await call('GET', '/api/v1/phone', login);
+    expect(state.body).toMatchObject({
+      installed: true,
+      connected: true,
+      url: 'ws://100.64.0.9:8767',
+      token_set: true,
+      push_registered: true,
+      agent: 'Alpha',
+      restart_needed: false,
+    });
+    expect((await call('POST', '/api/v1/phone/token', { ...login, body: {} })).body.error.code).toBe('reauth_required');
+    expect(backend.tokensMade).toBe(0);
+    await reauth(login);
+    const made = await call('POST', '/api/v1/phone/token', { ...login, body: {} });
+    expect(made.status).toBe(200);
+    expect(made.body.token).toContain('fake-token');
+    expect(backend.tokensMade).toBe(1);
+    // The token is not in the state, nor in a later read.
+    expect(JSON.stringify((await call('GET', '/api/v1/phone', login)).body)).not.toContain('fake-token');
+  });
+
+  it('turns the voice channel on or off only after the password is confirmed, with a boolean, and says a restart is needed', async () => {
+    const login = await setupAdmin();
+    const body = { enabled: false };
+    expect((await call('POST', '/api/v1/phone/enabled', { ...login, body })).body.error.code).toBe('reauth_required');
+    await reauth(login);
+    expect((await call('POST', '/api/v1/phone/enabled', { ...login, body: { enabled: 'no' } })).status).toBe(400);
+    const res = await call('POST', '/api/v1/phone/enabled', { ...login, body });
+    expect(res.body).toEqual({ enabled: false, restart_needed: true });
+    expect(backend.enabledCalls).toEqual([false]);
+    expect((await call('GET', '/api/v1/phone', login)).body).toMatchObject({ enabled: false, restart_needed: true });
   });
 
   it('expires the re-authentication window', async () => {

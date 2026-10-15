@@ -23,6 +23,7 @@ import type { CredentialsPort } from './credentials.js';
 import { readEnvKeys, updateEnvKeys } from './env-file.js';
 import { liveEndpointDeps, probeEndpoint } from './model-endpoint.js';
 import { JOURNAL_NAME, type GroupModel, type Journal, type ModelPorts } from './model-settings.js';
+import { createPhonePort } from './phone.js';
 import type { PanelState } from './state.js';
 
 /** The first IPv4 gateway in the output of `docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}} {{end}}'`. */
@@ -141,5 +142,18 @@ export function createUpstreamBackend(options: UpstreamBackendOptions): PanelBac
     credentials: options.credentials,
     bridgeAddress: () => (bridgeCache ??= findBridgeAddress()),
     backups: options.backups,
+    phone: createPhonePort({
+      projectRoot: options.projectRoot,
+      installed: () => readInventory(options.projectRoot).channels.includes('voice'),
+      async wiredAgents() {
+        const rows = await getDb().all<{ name: string }>(
+          `SELECT ag.name AS name FROM messaging_groups mg
+             JOIN messaging_group_agents mga ON mga.messaging_group_id = mg.id
+             JOIN agent_groups ag ON ag.id = mga.agent_group_id
+            WHERE mg.channel_type = 'voice' ORDER BY ag.name`,
+        );
+        return rows.map((row) => row.name);
+      },
+    }),
   };
 }

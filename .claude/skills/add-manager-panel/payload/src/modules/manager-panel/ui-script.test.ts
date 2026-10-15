@@ -46,6 +46,14 @@ describe('the served browser script', () => {
     expect(APP_JS).toContain('m.images === true');
   });
 
+  it('has a phone app page with the token shown once in a dialog', () => {
+    expect(APP_JS).toContain('viewPhone');
+    expect(APP_JS).toContain('phone: viewPhone');
+    expect(APP_JS).toContain("api('POST', '/phone/token'");
+    expect(APP_JS).toContain("api('POST', '/phone/enabled'");
+    expect(APP_JS).toContain('T.phone.tokenTitle');
+  });
+
   it('lets a phone save the page to its home screen', () => {
     expect(INDEX_HTML).toContain('rel="manifest" href="/manifest.webmanifest"');
     expect(INDEX_HTML).toContain('rel="apple-touch-icon"');

@@ -828,3 +828,65 @@ describe('voice adapter', () => {
     });
   });
 });
+
+describe('a token that changes while the host runs', () => {
+  const OLD = 'o'.repeat(40);
+  const NEW = 'n'.repeat(40);
+
+  it('applies at the next login and closes the connection made with the old one', async () => {
+    let current = OLD;
+    const h = await start({ authToken: OLD, readToken: () => current, staleAfterMs: 200 });
+    const first = await connect(h, OLD);
+    first.ws.send(hello());
+    await until(() => first.received.length >= 0);
+    const closed = new Promise<number>((resolve) => first.ws.once('close', (code) => resolve(code)));
+    current = NEW;
+    expect(await closed).toBe(4401);
+    await expect(connect(h, OLD)).rejects.toThrow(/401/);
+    const second = await connect(h, NEW);
+    second.ws.send(hello());
+    await until(() => second.ws.readyState === WebSocket.OPEN);
+  });
+
+  it('falls back to the token it started with when the new one is missing or too short', async () => {
+    let current: string | undefined = 'short';
+    const h = await start({ authToken: OLD, readToken: () => current });
+    await connect(h, OLD);
+    current = undefined;
+    await connect(h, OLD);
+    await expect(connect(h, 'short')).rejects.toThrow(/401/);
+  });
+});
+
+describe('the connection state written for the panel', () => {
+  const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+
+  it('says whether the channel listens and whether the app is connected, and holds no secret', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-status-'));
+    const file = path.join(dir, 'voice-status.json');
+    try {
+      const h = await start({ statusPath: file });
+      expect(read(file)).toMatchObject({ version: 1, listening: true, connected: false, capabilities: 0 });
+      const app = await connect(h);
+      app.ws.send(hello(['set_timer', 'tell_time']));
+      await until(() => (read(file).connected as boolean) === true);
+      expect(read(file)).toMatchObject({ connected: true, capabilities: 2, locale: 'it-IT', lastDisconnectAt: null });
+      app.ws.close();
+      await until(() => (read(file).connected as boolean) === false);
+      expect(typeof read(file).lastDisconnectAt).toBe('string');
+      expect(fs.readFileSync(file, 'utf8')).not.toContain(TOKEN);
+      expect(fs.statSync(file).mode & 0o077).toBe(0);
+      await h.adapter.teardown();
+      expect(read(file)).toMatchObject({ listening: false, connected: false });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writes nothing when no path is given', async () => {
+    const h = await start({ statusPath: null });
+    const app = await connect(h);
+    app.ws.send(hello());
+    await until(() => app.ws.readyState === WebSocket.OPEN);
+  });
+});

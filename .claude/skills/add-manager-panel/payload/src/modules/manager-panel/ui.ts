@@ -241,7 +241,7 @@ header a.help { font-size: 14px; padding: 8px 10px; border-radius: 8px; } header
 export const APP_JS = `
 'use strict';
 var T = {
-  nav: { overview: 'Overview', agents: 'Agents', model: 'Model', backups: 'Backups' },
+  nav: { overview: 'Overview', agents: 'Agents', model: 'Model', phone: 'Phone', backups: 'Backups' },
   logout: 'Sign out',
   guide: { link: 'Guide', insecureMore: 'How to enable HTTPS' },
   terminal: {
@@ -285,6 +285,17 @@ var T = {
     checked: 'Endpoint checked.', applied: 'Applied.', affected: 'Agents that will be restarted', context: 'Context window', models: 'Models offered',
     interrupted: 'A previous change was interrupted. It is rolled back automatically at the next start.',
   },
+  phone: {
+    title: 'Phone app', help: 'How the phone app connects', intro: 'The NanoVoice app on your phone reaches this install through the voice channel. This page shows whether it is connected and lets you make a new token.',
+    notInstalled: 'The voice channel is not installed on this install. It comes from the add-voice skill.', connection: 'Connection',
+    app: 'App', connected: 'Connected', notConnected: 'Not connected', since: 'Connected since', lastSeen: 'Last connected', channel: 'Voice channel', listening: 'Listening', off: 'Off', enabledNotRunning: 'On, not running yet',
+    restart: 'The setting and the running channel differ. Restart NanoClaw for the change to take effect.',
+    address: 'Address for the app', problem_loopback: 'The channel listens on this machine only. Set the address of a private network or VPN that the phone reaches (VOICE_BIND_HOST), then restart.', problem_all_addresses: 'The channel listens on every address. Use the address the phone reaches this machine on.',
+    agent: 'Answers from agent', notWired: 'Not connected to an agent yet: finish the setup from a terminal.', push: 'Wake-up push', pushYes: 'Registered', pushNo: 'Not registered',
+    token: 'Token', tokenSet: 'Set', tokenMissing: 'Not set', newToken: 'Make a new token', confirmToken: 'Make a new token? The app is disconnected and has to be given the new one.',
+    tokenTitle: 'Give this token to the app', tokenBody: 'This token lets the phone in. It is shown only now and is not kept anywhere you can read it again. Enter it in the app (Settings, NanoClaw server), then close this window.', tokenSaved: 'I have entered it in the app',
+    turnOn: 'Turn the channel on', turnOff: 'Turn the channel off', changed: 'Saved. Restart NanoClaw for it to take effect.',
+  },
   backups: {
     title: 'Backups', create: 'Create backup', created: 'Created', size: 'Size', release: 'Release', consistency: 'Consistency', actions: 'Actions',
     verify: 'Verify', download: 'Download', del: 'Delete',
@@ -301,6 +312,7 @@ var T = {
   errors: {
     invalid_credentials: 'Wrong password.', login_throttled: 'Too many attempts. Wait a moment and try again.', invalid_setup_code: 'That setup code is not valid.',
     password_too_short: 'The password is too short.', password_too_long: 'The password is too long.', already_configured: 'An administrator already exists.',
+    not_installed: 'The voice channel is not installed.', token_missing: 'Make a token first.',
     unauthenticated: 'Your session ended. Sign in again.', reauth_required: 'Confirm your password first.', rate_limited: 'Too many requests. Slow down.', login_busy: 'Another sign-in check is running. Try again in a moment.', setup_in_progress: 'Setup is already in progress.', backup_key_pending: 'A backup finished in another session and its key has not been collected yet. Use that session, or wait a few minutes.',
     agents_busy: 'Agents are still running. Try again later or back up anyway.', probe_failed: 'The endpoint did not pass its checks',
     model_not_found: 'The endpoint does not list that model.', credential_missing: 'Store the credential first.', invalid_secret: 'That does not look like a key or token.',
@@ -733,7 +745,52 @@ function viewBackups() {
   api('GET', '/backups/job').then(function (r) { if (r.job.state === 'running' || (r.job.state === 'done' && r.job.key)) follow(r.job); }).catch(function () {});
 }
 
-var views = { overview: viewOverview, agents: viewAgents, model: viewModel, backups: viewBackups };
+function viewPhone() {
+  var out = h('div'); var box = h('div', { class: 'card' }, T.loading);
+  show(h('div', {}, h('h1', {}, T.phone.title), h('p', { class: 'muted' }, T.phone.intro, ' ', guide('the-phone-app', T.phone.help)), out, box));
+  function chip(ok, yes, no) { return h('span', { class: ok ? 'pill ok' : 'pill' }, ok ? yes : no); }
+  function row(label, value) { return h('p', {}, h('span', { class: 'muted' }, label + ': '), value); }
+  function showToken(token) {
+    var saved = h('input', { type: 'checkbox' }); var done = h('button', { class: 'primary', type: 'button', disabled: true }, T.close);
+    dialog(function (close) {
+      saved.onchange = function () { done.disabled = !saved.checked; }; done.onclick = function () { close(); load(); };
+      return h('div', {}, h('h1', {}, T.phone.tokenTitle), h('p', {}, T.phone.tokenBody), h('code', { class: 'key' }, token), h('label', { class: 'row' }, saved, T.phone.tokenSaved), h('div', { class: 'row' }, done));
+    });
+  }
+  function load() {
+    api('GET', '/phone').then(function (s) {
+      clear(box);
+      if (!s.installed) { box.appendChild(h('p', {}, T.phone.notInstalled, ' ', guide('the-phone-app', T.phone.help))); return; }
+      box.appendChild(h('h2', {}, T.phone.connection));
+      box.appendChild(row(T.phone.app, chip(s.connected, T.phone.connected, T.phone.notConnected)));
+      if (s.connected && s.connected_at) box.appendChild(row(T.phone.since, fmtDate(s.connected_at) + (s.locale ? ' (' + s.locale + ')' : '')));
+      else if (s.last_disconnect_at) box.appendChild(row(T.phone.lastSeen, fmtDate(s.last_disconnect_at)));
+      box.appendChild(row(T.phone.channel, chip(s.listening, T.phone.listening, s.enabled ? T.phone.enabledNotRunning : T.phone.off)));
+      if (s.restart_needed) box.appendChild(h('div', { class: 'notice' }, T.phone.restart));
+      box.appendChild(row(T.phone.address, s.url ? h('code', {}, s.url) : T.phone['problem_' + s.address_problem] || '-'));
+      box.appendChild(row(T.phone.agent, s.agent || h('span', {}, T.phone.notWired, ' ', guide('the-phone-app', T.phone.help))));
+      box.appendChild(row(T.phone.push, chip(s.push_registered, T.phone.pushYes, T.phone.pushNo)));
+      box.appendChild(row(T.phone.token, chip(s.token_set, T.phone.tokenSet, T.phone.tokenMissing)));
+      var tokenBtn = h('button', { type: 'button' }, T.phone.newToken);
+      tokenBtn.onclick = function () {
+        if (s.token_set && s.connected && !window.confirm(T.phone.confirmToken)) return;
+        clear(out); tokenBtn.disabled = true;
+        ensureReauth().then(function () { return api('POST', '/phone/token', {}); }).then(function (r) { tokenBtn.disabled = false; showToken(r.token); })
+          .catch(function (err) { tokenBtn.disabled = false; fail(out, err); });
+      };
+      var switchBtn = h('button', { type: 'button', class: s.enabled ? 'danger' : 'primary' }, s.enabled ? T.phone.turnOff : T.phone.turnOn);
+      switchBtn.onclick = function () {
+        clear(out); switchBtn.disabled = true;
+        ensureReauth().then(function () { return api('POST', '/phone/enabled', { enabled: !s.enabled }); }).then(function () { out.appendChild(message('ok', T.phone.changed)); load(); })
+          .catch(function (err) { switchBtn.disabled = false; fail(out, err); });
+      };
+      box.appendChild(h('div', { class: 'row' }, tokenBtn, switchBtn));
+    }).catch(function (err) { clear(box); fail(box, err); });
+  }
+  load();
+}
+
+var views = { overview: viewOverview, agents: viewAgents, model: viewModel, phone: viewPhone, backups: viewBackups };
 // The current page lives in the address (#model), so leaving for the guide and coming back lands on the same page.
 function fromHash() { var name = location.hash.replace('#', ''); return Object.prototype.hasOwnProperty.call(views, name) ? name : 'overview'; }
 function render(name) { state.view = name; renderNav(); views[name](); }

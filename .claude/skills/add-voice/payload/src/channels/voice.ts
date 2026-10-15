@@ -76,7 +76,15 @@ export interface VoiceAdapterOptions {
   port: number;
   host: string;
   authToken: string;
+  /**
+   * Where the token is read from at every login, when it can change while the host runs (the manager panel rotates
+   * it): a new token applies at once and an open connection made with the old one is closed. `authToken` is the
+   * fallback when this is absent or returns nothing.
+   */
+  readToken?: () => string | undefined;
   platformId: string;
+  /** Where the connection state is written for the manager panel (no secrets in it); null writes nothing. */
+  statusPath?: string | null;
   /** Quiet period after the last delivered message before `done` is sent. */
   doneDelayMs?: number;
   /**
@@ -372,6 +380,10 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
   let pingTimer: NodeJS.Timeout | null = null;
   let livenessTimer: NodeJS.Timeout | null = null;
   let lastHeardAt = 0; // last sign of life from the current client
+  let clientToken = ''; // the token the current client logged in with
+  let clientLocale: string | undefined;
+  let connectedAt: string | null = null;
+  let disconnectedAt: string | null = null;
 
   let client: WebSocket | null = null;
   let capabilities: Set<string> | null = null; // null until the client's hello
@@ -533,10 +545,10 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
           ? msg.capabilities.filter((c): c is string => typeof c === 'string' && ACTION_NAME.test(c))
           : [],
       );
-      log.info('Voice client connected', {
-        capabilities: [...capabilities],
-        locale: typeof msg.locale === 'string' ? msg.locale.slice(0, 20) : undefined,
-      });
+      clientLocale = typeof msg.locale === 'string' ? msg.locale.slice(0, 20) : undefined;
+      connectedAt = new Date().toISOString();
+      log.info('Voice client connected', { capabilities: [...capabilities], locale: clientLocale });
+      writeStatus(true);
       for (const text of pendingNotify.splice(0)) send(ws, { type: 'notify', text });
       return;
     }
@@ -637,8 +649,42 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
     if (client !== ws) return;
     client = null;
     capabilities = null;
+    disconnectedAt = new Date().toISOString();
+    writeStatus(true);
     // The app fails its open requests when the socket drops: nothing more belongs to them.
     closeAll();
+  }
+
+  /** The token a login is checked against now. */
+  function currentToken(): string {
+    const fresh = opts.readToken?.();
+    return fresh && fresh.length >= MIN_TOKEN_LENGTH ? fresh : opts.authToken;
+  }
+
+  /** The state the manager panel shows: whether the channel listens and whether the app is connected. No secrets. */
+  function writeStatus(listening: boolean): void {
+    if (!opts.statusPath) return;
+    try {
+      fs.mkdirSync(path.dirname(opts.statusPath), { recursive: true });
+      const temp = `${opts.statusPath}.tmp`;
+      fs.writeFileSync(
+        temp,
+        JSON.stringify({
+          version: 1,
+          listening,
+          connected: !!client && !!capabilities,
+          connectedAt: client && capabilities ? connectedAt : null,
+          lastDisconnectAt: disconnectedAt,
+          locale: client && capabilities ? (clientLocale ?? null) : null,
+          capabilities: client && capabilities ? capabilities.size : 0,
+          updatedAt: new Date().toISOString(),
+        }),
+        { mode: 0o600 },
+      );
+      fs.renameSync(temp, opts.statusPath);
+    } catch (err) {
+      log.warn('Voice status could not be written', { err: String(err) });
+    }
   }
 
   function handleConnection(ws: WebSocket): void {
@@ -649,6 +695,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
     }
     client = ws;
     capabilities = null;
+    clientToken = currentToken();
     lastHeardAt = Date.now();
     const heard = () => {
       if (client === ws) lastHeardAt = Date.now();
@@ -704,7 +751,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
 
       server.on('upgrade', (req, socket, head) => {
         const address = req.socket.remoteAddress ?? 'unknown';
-        if (loginRefused(address) || !tokenMatches(req.headers['authorization'], opts.authToken)) {
+        if (loginRefused(address) || !tokenMatches(req.headers['authorization'], currentToken())) {
           if (!loginRefused(address)) noteFailedLogin(address);
           socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
           socket.destroy();
@@ -729,6 +776,14 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
 
       livenessTimer = setInterval(
         () => {
+          // The token was changed (the panel rotated it): a connection made with the old one ends now.
+          if (client && clientToken !== currentToken()) {
+            log.info('Voice token changed; closing the connection made with the old one');
+            const old = client;
+            forgetClient(old);
+            old.close(4401, 'token changed');
+            return;
+          }
           if (client && Date.now() - lastHeardAt > staleAfterMs) {
             log.info('Voice client went silent; dropping the connection', { silentMs: Date.now() - lastHeardAt });
             const silent = client;
@@ -740,6 +795,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       );
       livenessTimer.unref();
 
+      writeStatus(true);
       config.onMetadata(chatId, 'Voice', false);
     },
 
@@ -750,6 +806,8 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       closeAll();
       client?.close(1001, 'server shutting down');
       client = null;
+      capabilities = null;
+      writeStatus(false);
       wss?.close();
       if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
       server = null;
@@ -865,8 +923,11 @@ registerChannelAdapter('voice', {
       port: parseInt(get('VOICE_CHANNEL_PORT') || '8767', 10),
       host: get('VOICE_BIND_HOST') || '127.0.0.1',
       authToken,
+      // Read again at every login, so that a token rotated in the panel applies without a restart.
+      readToken: () => process.env.VOICE_AUTH_TOKEN || readEnvFile(['VOICE_AUTH_TOKEN']).VOICE_AUTH_TOKEN,
       platformId: get('VOICE_PLATFORM_ID') || 'default',
       pushStatePath: path.join(DATA_DIR, 'voice-push.json'),
+      statusPath: path.join(DATA_DIR, 'voice-status.json'),
     });
   },
   defaults: VOICE_DEFAULTS,

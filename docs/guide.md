@@ -230,6 +230,11 @@ removing agents is not done here: see [Channels and agents](#channels-and-agents
 
 The page shows the endpoint and model all agents use. See [Models](#models) for how to use it.
 
+### Phone
+
+Whether the NanoVoice app is connected, the address it uses, the token, and the voice channel's on/off
+switch. See [The phone app](#the-phone-app).
+
 ### Backups
 
 The list of backups with date, size, release and consistency, and the actions Verify, Download and
@@ -647,6 +652,51 @@ restore (or reinstall the channels' credentials yourself).
 4. Run a [rehearsal restore](#rehearsal-restore) first, check the agents, then restore for real with
    the old machine stopped, so that two installs never talk to the same accounts.
 
+## The phone app
+
+[NanoVoice](https://github.com/olac-acul/nanovoice) is an Android voice assistant that uses this install as its
+brain. It talks to NanoClaw through the **voice channel**, which comes from the `add-voice` skill of this
+repository: a WebSocket that streams the agent's replies to the phone, lets the agent run actions on it (timers,
+alarms, calendar changes with approval on the phone, music, notes, photos) and is protected by a token.
+
+### Setting it up
+
+Everything that changes the install's structure is done from a terminal, once:
+
+```bash
+pnpm exec tsx scripts/voice-setup.ts enable --bind <address the phone reaches>
+# restart NanoClaw, then
+pnpm exec tsx scripts/voice-setup.ts wire
+pnpm exec tsx scripts/voice-setup.ts pair      # prints the address and token for the app
+```
+
+The skill's own documentation explains the choices: which agent answers (one you already have, which shares its memory
+and tools with the app, or a separate one for the app alone) and which address to listen on (a VPN or private
+network the phone reaches, never every address of a machine that faces the internet).
+
+### The Phone page
+
+- **App** shows whether the phone is connected now, since when and in which language, or when it last was.
+- **Voice channel** shows whether the channel is listening. If the setting in `.env` and the running channel differ
+  (you turned it on or off, and NanoClaw has not restarted since) the page says a restart is needed.
+- **Address for the app** is what to enter in the app. If the channel listens on this machine only, or on every address,
+  the page says so instead and tells you what to change (`VOICE_BIND_HOST`).
+- **Answers from agent** is the agent the channel is wired to. It says so when there is none yet.
+- **Wake-up push** says whether the app has registered a place where the server can wake it when it is off.
+- **Make a new token** creates a new token, stores it and shows it **once**; nobody can read it again afterwards, here
+  or anywhere else in the panel. Use it when you first set up, when the token may have leaked, or when you lose a
+  phone. It ends the app's current connection at once (the channel checks the token at every login and notices when
+  it changes), and the app has to be given the new one. You are asked for your password again first.
+- **Turn the channel on / off** changes `VOICE_ENABLED` in `.env`. It needs a token to turn on, and takes effect the next
+  time NanoClaw starts.
+
+### Security
+
+The token is a password for the agent and for the phone's actions: anyone who has it can talk to the agent the
+channel is wired to, with that agent's memory and tools. A plain `ws://` address sends the token in clear text, which is
+why the app accepts it only on a private network with a VPN up; elsewhere use a TLS proxy and `wss://`. The status the
+channel shares with the panel (`data/voice-status.json`) holds no secret.
+
 ## Terminal-only tasks
 
 These are deliberately not in the panel. Each is a short recipe; all commands run in the NanoClaw install
@@ -867,6 +917,9 @@ State-changing calls need the cookie, the `X-CSRF-Token` header and an `Origin` 
 | `POST /credentials/claude`, `POST /credentials/openai-key` | yes | store a key or token; nothing is returned |
 | `DELETE /credentials/claude`, `/openai-key`, `/chatgpt-login` | yes | remove a stored credential; refused with 409 while in use |
 | `POST`, `GET`, `DELETE /credentials/chatgpt/login` | start: yes | ChatGPT device sign-in: start, poll for page and code, cancel |
+| `GET /phone` | no | the phone app's state: connection, address, whether a token is set (never the token) |
+| `POST /phone/token` | yes | make a new token; it is returned once |
+| `POST /phone/enabled` | yes | turn the voice channel on or off (`{"enabled": true}`); takes effect at the next start |
 | `GET /backups` | no | list |
 | `POST /backups` | yes | start a backup in the background (`202`); `force` is ignored |
 | `GET /backups/job` | no | progress of the backup; once it is done, its key, one time only |

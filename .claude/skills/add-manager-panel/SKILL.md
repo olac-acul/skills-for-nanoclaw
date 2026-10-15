@@ -61,6 +61,8 @@ payload/src/modules/manager-panel/model-settings.test.ts -> src/modules/manager-
 payload/src/modules/manager-panel/model-settings.ts -> src/modules/manager-panel/model-settings.ts
 payload/src/modules/manager-panel/opaque-id.ts -> src/modules/manager-panel/opaque-id.ts
 payload/src/modules/manager-panel/password.ts -> src/modules/manager-panel/password.ts
+payload/src/modules/manager-panel/phone.test.ts -> src/modules/manager-panel/phone.test.ts
+payload/src/modules/manager-panel/phone.ts -> src/modules/manager-panel/phone.ts
 payload/src/modules/manager-panel/primitives.test.ts -> src/modules/manager-panel/primitives.test.ts
 payload/src/modules/manager-panel/routes.ts -> src/modules/manager-panel/routes.ts
 payload/src/modules/manager-panel/server.test.ts -> src/modules/manager-panel/server.test.ts

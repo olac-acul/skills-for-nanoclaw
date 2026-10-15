@@ -7,6 +7,7 @@ import type { BackupRecord, CreateOptions } from '../manager-backup/service.js';
 import type { VerifyResult } from '../manager-backup/bundle.js';
 import type { CredentialsPort } from './credentials.js';
 import type { ModelPorts } from './model-settings.js';
+import type { PhonePort } from './phone.js';
 
 export interface Overview {
   release: string;
@@ -52,4 +53,6 @@ export interface PanelBackend {
   /** The Docker bridge address as seen from the host, where a model server on this machine is reachable from agents. */
   bridgeAddress(): string | null;
   backups: BackupPort;
+  /** The phone app (voice channel) page. */
+  phone: PhonePort;
 }

@@ -7,6 +7,7 @@ import type { AgentInfo, PanelBackend } from '../backend.js';
 import type { CredentialsPort, LoginState } from '../credentials.js';
 import type { GroupModel, Journal, ModelPorts } from '../model-settings.js';
 import type { ProbeResult } from '../model-endpoint.js';
+import type { PhonePort, PhoneStatus } from '../phone.js';
 
 export const CANARY = 'CANARY-7f3a91';
 
@@ -27,6 +28,9 @@ export interface FakeBackend extends PanelBackend {
   removed: string[];
   login: LoginState;
   loginCancelled: boolean;
+  phoneState: PhoneStatus;
+  tokensMade: number;
+  enabledCalls: boolean[];
 }
 
 export function fakeBackend(dir: string): FakeBackend {
@@ -66,6 +70,36 @@ export function fakeBackend(dir: string): FakeBackend {
     removed: [],
     login: { state: 'idle' },
     loginCancelled: false,
+    phoneState: {
+      installed: true,
+      enabled: true,
+      listening: true,
+      connected: true,
+      connectedAt: '2026-10-02T12:00:00.000Z',
+      lastDisconnectAt: null,
+      locale: 'it-IT',
+      url: 'ws://100.64.0.9:8767',
+      addressProblem: null,
+      tokenSet: true,
+      pushRegistered: true,
+      agent: 'Alpha',
+      restartNeeded: false,
+    },
+    tokensMade: 0,
+    enabledCalls: [],
+    phone: {
+      status: async () => ({ ...self.phoneState }),
+      async newToken() {
+        self.tokensMade += 1;
+        self.phoneState.tokenSet = true;
+        return `fake-token-${CANARY}-${'t'.repeat(30)}`;
+      },
+      async setEnabled(enabled) {
+        self.enabledCalls.push(enabled);
+        self.phoneState.enabled = enabled;
+        self.phoneState.restartNeeded = true;
+      },
+    } satisfies PhonePort,
     bridgeAddress: () => '100.64.0.1',
     credentials: {
       status: async () => ({ ...self.creds }),

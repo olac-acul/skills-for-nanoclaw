@@ -15,9 +15,9 @@ export function generateToken(): string {
   return randomBytes(24).toString('hex');
 }
 
-/** Tokens shorter than this are refused by the channel anyway; checked here to fail before a restart. */
+/** Tokens shorter than the channel's minimum (32) are refused by it; checked here to fail before a restart. */
 export function validToken(token: string): boolean {
-  return /^[A-Za-z0-9._~+/=-]{24,256}$/.test(token);
+  return /^[A-Za-z0-9._~+/=-]{32,256}$/.test(token);
 }
 
 export interface EnvUpdate {
