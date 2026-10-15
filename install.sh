@@ -179,7 +179,13 @@ INFO
   fi
   refresh_user_manager
   ask "Press Enter to start it." >/dev/null
-  in_install "bash nanoclaw.sh" || die "NanoClaw's installer did not finish. Fix the cause and run this script again."
+  # It can stop on a first run (the OneCLI gateway's first install on a machine sometimes does not report its
+  # address); run again, it picks up where it stopped.
+  until in_install "bash nanoclaw.sh"; do
+    note "NanoClaw's installer stopped (the reason is above). Run again, it goes on from where it stopped."
+    ask_no "Run it again now?" || die "NanoClaw's installer did not finish. Fix the cause and run this script again."
+    refresh_user_manager
+  done
   refresh_user_manager
   in_install "pnpm --silent exec tsx src/cli/client.ts groups list --json >/dev/null" \
     || die "NanoClaw does not answer after its installer: check 'systemctl --user status' as $NC_USER, then run this again"
