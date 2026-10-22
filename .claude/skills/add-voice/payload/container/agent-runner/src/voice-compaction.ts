@@ -4,7 +4,8 @@
  * Web...": a short line it shows animated and speaks, and the reply stays open for the answer.
  *
  * Called with every OpenCode event of the session (a seam in the OpenCode provider, see scripts/voice-core-seams.mjs).
- * It never throws into the caller and announces each compaction once.
+ * It never throws into the caller and tells the app once per request: OpenCode can start several compactions while
+ * answering one (it starts another when the summary is still too long), and the app needs to hear it only once.
  */
 import { writeMessageOut, type WriteMessageOut } from './db/messages-out.js';
 import { getCurrentReplyRoute, type ReplyRoute } from './db/session-state.js';
@@ -35,6 +36,7 @@ export interface CompactionDeps {
   write: (message: WriteMessageOut) => Promise<number>;
 }
 
+/** The requests whose summary was already announced (the latest ones). */
 const announced = new Set<string>();
 
 /** Tells the voice app that the conversation is being summarized. True when a line was written. */
@@ -43,11 +45,11 @@ export async function announceCompaction(
   deps: CompactionDeps = { route: getCurrentReplyRoute, write: writeMessageOut },
 ): Promise<boolean> {
   try {
-    const id = compactionStarted(event);
-    if (!id || announced.has(id)) return false;
+    if (!compactionStarted(event)) return false;
     const route = deps.route();
     if (!route || route.channelType !== 'voice' || !route.platformId) return false;
-    announced.add(id);
+    if (announced.has(route.inReplyTo)) return false;
+    announced.add(route.inReplyTo);
     if (announced.size > 50) announced.delete(announced.values().next().value as string);
     await deps.write({
       id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,

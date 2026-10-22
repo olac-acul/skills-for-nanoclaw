@@ -24,14 +24,24 @@ describe('compaction start', () => {
 });
 
 describe('announcement', () => {
-  it('tells the voice app once, as a working line tied to the request', async () => {
+  it('tells the voice app once per request, as a working line tied to it', async () => {
     const { written, deps: d } = deps(voiceRoute);
     const event = { type: 'message.part.updated', properties: { part: { type: 'compaction', messageID: 'a1' } } };
     expect(await announceCompaction(event, d)).toBe(true);
     expect(await announceCompaction(event, d)).toBe(false); // the same compaction again
+    // another compaction while answering the same request: still once
+    expect(await announceCompaction({ type: 'session.next.compaction.started', properties: { messageID: 'a2' } }, d)).toBe(false);
     expect(written).toHaveLength(1);
     expect(written[0]).toMatchObject({ in_reply_to: 'voice-in-1', channel_type: 'voice', platform_id: 'voice:default' });
     expect(JSON.parse(written[0]!.content)).toEqual({ text: COMPACTION_LINE, voice_working: true });
+  });
+
+  it('tells it again for the next request', async () => {
+    const first = deps({ ...voiceRoute, inReplyTo: 'voice-in-7' });
+    const second = deps({ ...voiceRoute, inReplyTo: 'voice-in-8' });
+    const event = { type: 'session.next.compaction.started', properties: { messageID: 'n1' } };
+    expect(await announceCompaction(event, first.deps)).toBe(true);
+    expect(await announceCompaction(event, second.deps)).toBe(true);
   });
 
   it('says nothing for a request from another channel, or with no request', async () => {
@@ -43,7 +53,12 @@ describe('announcement', () => {
   });
 
   it('never throws into the event loop', async () => {
-    const failing = { route: () => voiceRoute, write: async () => { throw new Error('db gone'); } };
+    let tried = 0;
+    const failing = {
+      route: () => ({ ...voiceRoute, inReplyTo: 'voice-in-failing' }),
+      write: async () => { tried++; throw new Error('db gone'); },
+    };
     expect(await announceCompaction({ type: 'session.next.compaction.started', properties: { messageID: 'c1' } }, failing)).toBe(false);
+    expect(tried).toBe(1);
   });
 });
