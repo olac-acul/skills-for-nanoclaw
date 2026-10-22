@@ -228,6 +228,19 @@ export interface ApplyOutcome {
 }
 
 /**
+ * The context the agents work with, in tokens: the model's window, but never more than this. OpenCode summarizes a
+ * conversation (auto-compaction) once it reaches the context limit minus the output limit; with the whole window of a
+ * large model (262k, say) that would be never in practice, and long contexts make every answer slow (measured: over
+ * 100k tokens, turns of a minute that time out). A conversation starts at about 25k tokens of instructions and tools.
+ */
+export const WORKING_CONTEXT = 65_536;
+
+/** The context limit written for a model whose window is [window] tokens. */
+export function workingContextFor(window: number): number {
+  return Math.min(window, WORKING_CONTEXT);
+}
+
+/**
  * OpenCode's model schema wants an output limit whenever a context limit is
  * given. Half the window, at most 4096 tokens, is a safe default for a model
  * whose real output limit the endpoint does not report.
@@ -247,8 +260,8 @@ function targetEnv(
     OPENCODE_SMALL_MODEL: `openai/${settings.smallModel}`,
     OPENCODE_AUTH_MODE: null, // API-key (or keyless) mode; clears a leftover ChatGPT sign-in mode
     // Both limits or neither: a context limit alone makes OpenCode reject the model definition.
-    OPENCODE_MODEL_CONTEXT_LIMIT: probe.contextLimit ? String(probe.contextLimit) : null,
-    OPENCODE_MODEL_OUTPUT_LIMIT: probe.contextLimit ? String(outputLimitFor(probe.contextLimit)) : null,
+    OPENCODE_MODEL_CONTEXT_LIMIT: probe.contextLimit ? String(workingContextFor(probe.contextLimit)) : null,
+    OPENCODE_MODEL_OUTPUT_LIMIT: probe.contextLimit ? String(outputLimitFor(workingContextFor(probe.contextLimit))) : null,
   };
 }
 

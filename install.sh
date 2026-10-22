@@ -202,6 +202,7 @@ step_skills() {
   else
     rm -f "$STATE_DIR/$NC_USER.voice"
   fi
+  working_context
   note "Applying them with NanoClaw's skill engine (copy, build, tests): a few minutes."
   as_user "node ~/skills-for-nanoclaw/scripts/install-skills.mjs --install ~/nanoclaw --skills $skills" \
     || die "a skill did not apply (see above). Fix the cause and run this script again."
@@ -237,6 +238,33 @@ choose_address() {
 set_env() {
   # $1 key, $2 value: replace or append in the install's .env (kept private).
   in_install "touch .env && chmod 600 .env && grep -v '^$1=' .env >.env.installer-tmp; echo '$1=$2' >>.env.installer-tmp; mv .env.installer-tmp .env"
+}
+
+# OpenCode summarizes a long conversation (auto-compaction) only when it knows a context limit, and NanoClaw's
+# installer sets none for a local model: conversations then grow until every answer is slow. The same working context
+# the panel writes: the model's window, at most 65536 tokens.
+working_context() {
+  local env="$INSTALL/.env" base model window output
+  grep -q '^OPENCODE_MODEL_CONTEXT_LIMIT=' "$env" 2>/dev/null && return 0
+  base="$(sed -n 's/^OPENCODE_BASE_URL=//p' "$env" 2>/dev/null | tail -1 | tr -d "\"'")"
+  model="$(sed -n 's/^OPENCODE_MODEL=//p' "$env" 2>/dev/null | tail -1 | tr -d "\"'" | sed 's|^openai/||')"
+  [[ -n "$base" && -n "$model" ]] || return 0
+  window="$(curl -s --max-time 10 "${base%/}/models" | python3 -c '
+import json, sys
+wanted = sys.argv[1]
+for m in json.load(sys.stdin).get("data") or []:
+    if m.get("id") == wanted and isinstance(m.get("max_model_len"), int):
+        print(m["max_model_len"])
+' "$model" 2>/dev/null || true)"
+  if [[ ! "$window" =~ ^[0-9]+$ ]]; then
+    note "The model's context window is unknown: set OPENCODE_MODEL_CONTEXT_LIMIT by hand (see the guide, Models)."
+    return 0
+  fi
+  (( window > 65536 )) && window=65536
+  output=$(( window / 2 )); (( output > 4096 )) && output=4096; (( output < 256 )) && output=256
+  set_env OPENCODE_MODEL_CONTEXT_LIMIT "$window"
+  set_env OPENCODE_MODEL_OUTPUT_LIMIT "$output"
+  note "Agents summarize their conversations past $window tokens of context (OPENCODE_MODEL_CONTEXT_LIMIT)."
 }
 
 step_panel() {

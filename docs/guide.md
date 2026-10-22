@@ -318,6 +318,23 @@ address (shown by `docker network inspect bridge`, usually the first one in the 
 container itself. A model server on the same machine as NanoClaw therefore needs an address such as
 `http://<bridge-address>:8000/v1` and must listen on that interface, not only on `127.0.0.1`.
 
+### Long conversations
+
+OpenCode summarizes a conversation by itself (auto-compaction) when it reaches the context limit minus the output
+limit, and goes on from the summary: the agent keeps the thread, the model gets a short prompt again. It does that only
+when it knows a context limit, and NanoClaw's installer sets none for a local model, so without one conversations grow
+until each answer takes a long time (on a test install: over 100k tokens, turns of a minute that timed out).
+
+The panel (when you change the model) and `install.sh` write a **working context**: the model's window, but at most
+65,536 tokens. A conversation starts at about 25k tokens of instructions and tools, so that leaves room for a normal
+exchange before the summary. The turn that makes the summary is slower; the ones after are fast again. To change it,
+set both in `.env` and restart the agents (`ncl groups restart --id <group>`), no restart of NanoClaw needed:
+
+```
+OPENCODE_MODEL_CONTEXT_LIMIT=65536
+OPENCODE_MODEL_OUTPUT_LIMIT=4096
+```
+
 ### The small model
 
 OpenCode, the provider that talks to the endpoint, can use a second, lighter model for minor
@@ -481,7 +498,8 @@ Applying a change (an endpoint, ChatGPT or Claude) does this, in order:
 2. Writes a **journal** with the previous `.env` values and every agent's previous provider and model.
 3. Writes the `OPENCODE_*` settings to `.env`: for an endpoint, `OPENCODE_PROVIDER`, `OPENCODE_BASE_URL`,
    `OPENCODE_MODEL`, `OPENCODE_SMALL_MODEL` and, when the server reports its context window,
-   `OPENCODE_MODEL_CONTEXT_LIMIT` and `OPENCODE_MODEL_OUTPUT_LIMIT` (half the window, at most 4096), and `OPENCODE_MODEL_INPUT_MODALITIES` when you made an image choice;
+   `OPENCODE_MODEL_CONTEXT_LIMIT` (the working context, see *Long conversations*) and `OPENCODE_MODEL_OUTPUT_LIMIT`
+   (half of it, at most 4096), and `OPENCODE_MODEL_INPUT_MODALITIES` when you made an image choice;
    for ChatGPT the settings listed in [ChatGPT](#chatgpt); for Claude nothing.
 4. Sets every agent group's provider and model: `opencode` and `openai/<model>`, or the default
    provider (Claude) with the model you gave.

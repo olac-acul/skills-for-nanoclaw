@@ -10,6 +10,8 @@ import {
   withImages,
   applyModelChange,
   outputLimitFor,
+  WORKING_CONTEXT,
+  workingContextFor,
   previewModelChange,
   readModelStatus,
   recoverModelChange,
@@ -306,6 +308,8 @@ describe('output limit', () => {
     expect(outputLimitFor(32768)).toBe(4096);
     expect(outputLimitFor(4096)).toBe(2048);
     expect(outputLimitFor(300)).toBe(256);
+    expect(workingContextFor(262_144)).toBe(WORKING_CONTEXT);
+    expect(workingContextFor(32_768)).toBe(32_768);
   });
 
   it('is written and removed together with the context limit', async () => {
@@ -315,6 +319,13 @@ describe('output limit', () => {
     await applyModelChange(ports, input);
     expect(ports.env.OPENCODE_MODEL_CONTEXT_LIMIT).toBeUndefined();
     expect(ports.env.OPENCODE_MODEL_OUTPUT_LIMIT).toBeUndefined();
+  });
+
+  it('keeps a large window to the working context, so conversations get summarized in time', async () => {
+    ports.probeResult = { ...GOOD, contextLimit: 262_144 };
+    await applyModelChange(ports, input);
+    expect(ports.env.OPENCODE_MODEL_CONTEXT_LIMIT).toBe(String(WORKING_CONTEXT));
+    expect(ports.env.OPENCODE_MODEL_OUTPUT_LIMIT).toBe('4096');
   });
 });
 
