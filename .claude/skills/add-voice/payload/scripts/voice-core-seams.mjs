@@ -8,6 +8,9 @@
  *   attachments     the files the host staged for a turn (a photo from the app) reach the provider, which hands
  *                   them to the model (the OpenCode provider already reads `attachments`; the poll loop never
  *                   supplied them);
+ *   availability    a tool may say when it is available (`available()`, asked at each listing); the MCP server lists
+ *                   and runs only those: the phone tools exist only in the voice app's session, not in every
+ *                   prompt of the other channels;
  *   summaries       when OpenCode summarizes a long conversation (auto-compaction), the voice app is told, the way
  *                   voice_working does (`voice-compaction.ts`). Optional: only where the OpenCode provider is
  *                   installed; skipped, not an error, without it.
@@ -104,6 +107,37 @@ export const SEAMS = [
         anchor: 'return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files });',
         replace: 'return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files, inReplyTo });',
         marker: 'content: JSON.parse(content), files, inReplyTo }',
+      },
+    ],
+  },
+  {
+    file: 'container/agent-runner/src/mcp-tools/types.ts',
+    edits: [
+      {
+        name: 'McpToolDefinition.available',
+        anchor: '  handler: (args: Record<string, unknown>, context?: { signal: AbortSignal }) => Promise<CallToolResult>;\n}\n',
+        replace:
+          '  handler: (args: Record<string, unknown>, context?: { signal: AbortSignal }) => Promise<CallToolResult>;\n' +
+          '  /** False: the tool is neither listed nor runnable now. Asked at each listing, when the session is known. */\n' +
+          '  available?: () => boolean;\n}\n',
+        marker: 'available?: () => boolean;',
+      },
+    ],
+  },
+  {
+    file: 'container/agent-runner/src/mcp-tools/server.ts',
+    edits: [
+      {
+        name: 'only available tools are listed',
+        anchor: '    tools: allTools.map((t) => t.tool),\n',
+        replace: '    tools: allTools.filter((t) => t.available?.() ?? true).map((t) => t.tool),\n',
+        marker: 'allTools.filter((t) => t.available?.() ?? true)',
+      },
+      {
+        name: 'an unavailable tool is not run',
+        anchor: '    const tool = toolMap.get(name);\n    if (!tool) {\n',
+        replace: '    const tool = toolMap.get(name);\n    if (!tool || tool.available?.() === false) {\n',
+        marker: 'if (!tool || tool.available?.() === false) {',
       },
     ],
   },

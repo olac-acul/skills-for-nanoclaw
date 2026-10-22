@@ -54,7 +54,7 @@ ws@8.21.3
 @types/ws@8.18.1
 ```
 
-The core changes: two always, and a third where the OpenCode provider is installed, which tells the app when OpenCode summarizes a long conversation (it shows and says "Riassumo la conversazione...", like a web search). This is idempotent: run again after an update of NanoClaw, it does nothing when the changes are in place and stops without writing anything if the code they attach to has moved.
+The core changes: three always (replies tied to the request; host-staged photos reaching the provider; tools that say when they are available, so the phone tools are offered only in the voice app's conversation and not in every Telegram or terminal prompt), and one where the OpenCode provider is installed, which tells the app when OpenCode summarizes a long conversation (it shows and says "Riassumo la conversazione...", like a web search). This is idempotent: run again after an update of NanoClaw, it does nothing when the changes are in place and stops without writing anything if the code they attach to has moved.
 
 ```nc:run effect:refresh
 node scripts/voice-core-seams.mjs

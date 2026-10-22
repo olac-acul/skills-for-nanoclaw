@@ -32,6 +32,7 @@ import {
   phoneStopTimer,
   phoneVolume,
   voiceWorking,
+  inVoiceSession,
 } from './phone.js';
 
 function seedVoiceDestination(): void {
@@ -441,3 +442,27 @@ describe('calendar event changes', () => {
     expect(getUndeliveredMessages()).toHaveLength(0);
   });
 });
+
+describe('the phone tools only in the voice session', () => {
+  const route = (channel: string | null, platform: string | null) => {
+    const db = getInboundDb();
+    db.exec('CREATE TABLE IF NOT EXISTS session_routing (id INTEGER PRIMARY KEY, channel_type TEXT, platform_id TEXT, thread_id TEXT)');
+    db.prepare('INSERT OR REPLACE INTO session_routing (id, channel_type, platform_id, thread_id) VALUES (1, ?, ?, NULL)').run(channel, platform);
+  };
+
+  it('are there in the voice session and in a session bound to no chat', () => {
+    expect(inVoiceSession()).toBe(true); // no routing at all
+    route('voice', 'voice:default');
+    expect(inVoiceSession()).toBe(true);
+    route(null, null);
+    expect(inVoiceSession()).toBe(true);
+  });
+
+  it('are not there in a Telegram or terminal conversation', () => {
+    route('telegram', 'telegram:1');
+    expect(inVoiceSession()).toBe(false);
+    route('cli', 'local');
+    expect(inVoiceSession()).toBe(false);
+  });
+});
+

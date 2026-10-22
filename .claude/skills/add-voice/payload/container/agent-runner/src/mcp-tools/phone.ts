@@ -9,6 +9,7 @@
 import { getAllDestinations } from '../destinations.js';
 import { writeMessageOut } from '../db/messages-out.js';
 import { getCurrentInReplyTo, getCurrentReplyRoute } from '../db/session-state.js';
+import { getSessionRouting } from '../db/session-routing.js';
 import { registerTools } from './server.js';
 import type { McpToolDefinition } from './types.js';
 
@@ -647,7 +648,21 @@ export const phoneImageSearch = voiceTool(
   (built) => ({ text: `Apro ${IMAGE_ENGINES[String(built.engine)]} con la foto.`, working: false }),
 );
 
-registerTools([
+/**
+ * The phone tools exist only where they can work: in the voice app's session, or in a session bound to no chat (a
+ * scheduled task's), where the channel is not known. In a Telegram or terminal conversation they would only add
+ * some 4,000 tokens to every prompt and fail when called. Read at each listing, so the session is known by then.
+ */
+export function inVoiceSession(): boolean {
+  try {
+    const { channel_type: channel } = getSessionRouting();
+    return !channel || channel === 'voice';
+  } catch {
+    return true;
+  }
+}
+
+const phoneTools: McpToolDefinition[] = [
   phoneSetTimer,
   phoneSetAlarm,
   phoneStopTimer,
@@ -676,4 +691,5 @@ registerTools([
   phoneIdentifyPlant,
   phoneFoodProduct,
   phoneImageSearch,
-]);
+];
+registerTools(phoneTools.map((tool) => ({ ...tool, available: inVoiceSession })));
