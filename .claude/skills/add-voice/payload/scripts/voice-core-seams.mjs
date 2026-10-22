@@ -7,7 +7,10 @@
  *                   channel adapter, so the app can tie a reply, an action or "done" to the request it belongs to;
  *   attachments     the files the host staged for a turn (a photo from the app) reach the provider, which hands
  *                   them to the model (the OpenCode provider already reads `attachments`; the poll loop never
- *                   supplied them).
+ *                   supplied them);
+ *   summaries       when OpenCode summarizes a long conversation (auto-compaction), the voice app is told, the way
+ *                   voice_working does (`voice-compaction.ts`). Optional: only where the OpenCode provider is
+ *                   installed; skipped, not an error, without it.
  *
  * This script applies them as exact, anchored edits. It is built to fail loudly rather than guess:
  *
@@ -25,7 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** Each edit: `anchor` (exact text, once in the file), `replace` (the text that takes its place) and `marker`
- *  (text that is present only once the edit is applied). */
+ *  (text that is present only once the edit is applied). A file marked `optional` is left alone when it is absent. */
 export const SEAMS = [
   {
     file: 'container/agent-runner/src/poll-loop.ts',
@@ -105,6 +108,25 @@ export const SEAMS = [
     ],
   },
   {
+    file: 'container/agent-runner/src/providers/opencode-turn.ts',
+    optional: true,
+    edits: [
+      {
+        name: 'import announceCompaction',
+        anchor: "import { randomBytes } from 'crypto';\n",
+        replace: "import { randomBytes } from 'crypto';\n\nimport { announceCompaction } from '../voice-compaction.js';\n",
+        marker: "import { announceCompaction } from '../voice-compaction.js';",
+      },
+      {
+        name: 'every event of the turn passes by the compaction announcement',
+        anchor: '    if (!pump.belongsTo(record.sessionID, sessionId)) return;\n',
+        replace:
+          '    if (!pump.belongsTo(record.sessionID, sessionId)) return;\n    void announceCompaction(event); // the voice app shows that the conversation is being summarized\n',
+        marker: 'void announceCompaction(event);',
+      },
+    ],
+  },
+  {
     file: 'src/delivery.ts',
     edits: [
       {
@@ -134,10 +156,10 @@ const count = (text, needle) => (needle === '' ? 0 : text.split(needle).length -
 export function plan(root, seams = SEAMS) {
   const files = [];
   const problems = [];
-  for (const { file, edits } of seams) {
+  for (const { file, edits, optional } of seams) {
     const full = path.join(root, file);
     if (!fs.existsSync(full)) {
-      problems.push(`${file}: file not found (is this a NanoClaw install?)`);
+      if (!optional) problems.push(`${file}: file not found (is this a NanoClaw install?)`);
       continue;
     }
     let content = fs.readFileSync(full, 'utf8');

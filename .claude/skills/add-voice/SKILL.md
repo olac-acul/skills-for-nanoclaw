@@ -33,6 +33,8 @@ payload/container/agent-runner/src/mcp-tools/phone.test.ts -> container/agent-ru
 payload/container/agent-runner/src/mcp-tools/phone.ts -> container/agent-runner/src/mcp-tools/phone.ts
 payload/container/agent-runner/src/prompt-attachments.test.ts -> container/agent-runner/src/prompt-attachments.test.ts
 payload/container/agent-runner/src/prompt-attachments.ts -> container/agent-runner/src/prompt-attachments.ts
+payload/container/agent-runner/src/voice-compaction.test.ts -> container/agent-runner/src/voice-compaction.test.ts
+payload/container/agent-runner/src/voice-compaction.ts -> container/agent-runner/src/voice-compaction.ts
 payload/scripts/tsconfig.voice-setup.json -> scripts/tsconfig.voice-setup.json
 payload/scripts/voice-core-seams.mjs -> scripts/voice-core-seams.mjs
 payload/scripts/voice-setup.ts -> scripts/voice-setup.ts
@@ -52,7 +54,7 @@ ws@8.21.3
 @types/ws@8.18.1
 ```
 
-The two core changes. This is idempotent: run again after an update of NanoClaw, it does nothing when the changes are in place and stops without writing anything if the code they attach to has moved.
+The core changes: two always, and a third where the OpenCode provider is installed, which tells the app when OpenCode summarizes a long conversation (it shows and says "Riassumo la conversazione...", like a web search). This is idempotent: run again after an update of NanoClaw, it does nothing when the changes are in place and stops without writing anything if the code they attach to has moved.
 
 ```nc:run effect:refresh
 node scripts/voice-core-seams.mjs
@@ -83,7 +85,7 @@ pnpm exec vitest run src/channels/voice
 ```
 
 ```nc:run effect:test
-(cd container/agent-runner && bun install --frozen-lockfile && bun test src/mcp-tools/phone.test.ts src/prompt-attachments.test.ts)
+(cd container/agent-runner && bun install --frozen-lockfile && bun test src/mcp-tools/phone.test.ts src/prompt-attachments.test.ts src/voice-compaction.test.ts)
 ```
 
 ## Enable

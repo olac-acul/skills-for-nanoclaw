@@ -117,3 +117,18 @@ test('the command line: --check fails before, passes after; a broken tree exits 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('an optional file that is absent is skipped, not a problem', () => {
+  const root = install();
+  try {
+    const optional = SEAMS.filter((s) => s.optional);
+    assert.ok(optional.length > 0, 'there is an optional seam');
+    for (const { file } of optional) rmSync(join(root, file));
+    const { problems } = plan(root);
+    assert.deepEqual(problems, []);
+    assert.equal(apply(root).length, SEAMS.length - optional.length);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
