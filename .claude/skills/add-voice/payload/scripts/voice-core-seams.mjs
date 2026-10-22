@@ -11,6 +11,8 @@
  *   availability    a tool may say when it is available (`available()`, asked at each listing); the MCP server lists
  *                   and runs only those: the phone tools exist only in the voice app's session, not in every
  *                   prompt of the other channels;
+ *   voice section   OpenCode gets the agent's instructions without the voice section in conversations of other
+ *                   channels (`voice-instructions-filter.ts`). Optional, like the next one: only with OpenCode;
  *   summaries       when OpenCode summarizes a long conversation (auto-compaction), the voice app is told, the way
  *                   voice_working does (`voice-compaction.ts`). Optional: only where the OpenCode provider is
  *                   installed; skipped, not an error, without it.
@@ -138,6 +140,25 @@ export const SEAMS = [
         anchor: '    const tool = toolMap.get(name);\n    if (!tool) {\n',
         replace: '    const tool = toolMap.get(name);\n    if (!tool || tool.available?.() === false) {\n',
         marker: 'if (!tool || tool.available?.() === false) {',
+      },
+    ],
+  },
+  {
+    file: 'container/agent-runner/src/providers/opencode-config.ts',
+    optional: true,
+    edits: [
+      {
+        name: 'import instructionsForSession',
+        anchor: "import { openCodeInstructionsPath } from './opencode-memory.js';\n",
+        replace:
+          "import { openCodeInstructionsPath } from './opencode-memory.js';\nimport { instructionsForSession } from '../voice-instructions-filter.js';\n",
+        marker: "import { instructionsForSession } from '../voice-instructions-filter.js';",
+      },
+      {
+        name: 'the agent instructions without the voice section outside the voice session',
+        anchor: 'instructions: [`${AGENT_DIR}/CLAUDE.md`,',
+        replace: 'instructions: [instructionsForSession(`${AGENT_DIR}/CLAUDE.md`),',
+        marker: 'instructionsForSession(`${AGENT_DIR}/CLAUDE.md`)',
       },
     ],
   },

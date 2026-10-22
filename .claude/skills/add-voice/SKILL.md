@@ -35,6 +35,8 @@ payload/container/agent-runner/src/prompt-attachments.test.ts -> container/agent
 payload/container/agent-runner/src/prompt-attachments.ts -> container/agent-runner/src/prompt-attachments.ts
 payload/container/agent-runner/src/voice-compaction.test.ts -> container/agent-runner/src/voice-compaction.test.ts
 payload/container/agent-runner/src/voice-compaction.ts -> container/agent-runner/src/voice-compaction.ts
+payload/container/agent-runner/src/voice-instructions-filter.test.ts -> container/agent-runner/src/voice-instructions-filter.test.ts
+payload/container/agent-runner/src/voice-instructions-filter.ts -> container/agent-runner/src/voice-instructions-filter.ts
 payload/scripts/tsconfig.voice-setup.json -> scripts/tsconfig.voice-setup.json
 payload/scripts/voice-core-seams.mjs -> scripts/voice-core-seams.mjs
 payload/scripts/voice-setup.ts -> scripts/voice-setup.ts
@@ -54,7 +56,7 @@ ws@8.21.3
 @types/ws@8.18.1
 ```
 
-The core changes: three always (replies tied to the request; host-staged photos reaching the provider; tools that say when they are available, so the phone tools are offered only in the voice app's conversation and not in every Telegram or terminal prompt), and one where the OpenCode provider is installed, which tells the app when OpenCode summarizes a long conversation (it shows and says "Riassumo la conversazione...", like a web search). This is idempotent: run again after an update of NanoClaw, it does nothing when the changes are in place and stops without writing anything if the code they attach to has moved.
+The core changes: three always (replies tied to the request; host-staged photos reaching the provider; tools that say when they are available, so the phone tools are offered only in the voice app's conversation and not in every Telegram or terminal prompt), and two where the OpenCode provider is installed: the voice section of the instructions only in the voice app's conversation, and telling the app when OpenCode summarizes a long conversation (it shows and says "Riassumo la conversazione...", like a web search). This is idempotent: run again after an update of NanoClaw, it does nothing when the changes are in place and stops without writing anything if the code they attach to has moved.
 
 ```nc:run effect:refresh
 node scripts/voice-core-seams.mjs
@@ -85,7 +87,7 @@ pnpm exec vitest run src/channels/voice
 ```
 
 ```nc:run effect:test
-(cd container/agent-runner && bun install --frozen-lockfile && bun test src/mcp-tools/phone.test.ts src/prompt-attachments.test.ts src/voice-compaction.test.ts)
+(cd container/agent-runner && bun install --frozen-lockfile && bun test src/mcp-tools/phone.test.ts src/prompt-attachments.test.ts src/voice-compaction.test.ts src/voice-instructions-filter.test.ts)
 ```
 
 ## Enable

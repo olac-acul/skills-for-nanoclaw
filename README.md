@@ -5,16 +5,17 @@
 
 Skills that add to a clean upstream NanoClaw install without forking it: an installation is upstream plus the
 skills it has installed, and it updates with upstream's own `/update-nanoclaw`. The manager skills edit no
-upstream source file beyond one import line. `add-voice` also makes two small changes to core files, listed in
-its own documentation, applied as exact anchored edits that stop and change nothing if upstream moves that code.
+upstream source file beyond one import line. `add-voice` and `add-assistant-prompt` also make small changes to core
+or provider files, listed in their own documentation, applied as exact anchored edits that stop and change nothing if upstream moves that code.
 
 | Skill | What it adds |
 | --- | --- |
 | [`add-manager-panel`](.claude/skills/add-manager-panel/SKILL.md) | A web panel for the main settings: overview, agents, the model provider for all agents (an OpenAI-compatible endpoint such as Ollama, ChatGPT with a subscription login or an API key, or Claude), provider credentials stored in the credential gateway, backups, and a built-in guide. |
 | [`add-manager-backup`](.claude/skills/add-manager-backup/SKILL.md) | Encrypted, verified backups and restores from the terminal (and from the panel): a restore with a way back if it fails, a rehearsal mode that never activates channel accounts, and weekly scheduled backups with a retention count. |
 | [`add-voice`](.claude/skills/add-voice/SKILL.md) | A voice channel for the NanoVoice Android app: a token-protected WebSocket that streams the agent's replies to the phone and lets the agent run phone actions (timers, alarms, calendar changes with approval on the phone, music, notes, photos), with a setup script that enables it, wires it to an agent and shows what to enter in the app. |
+| [`add-assistant-prompt`](.claude/skills/add-assistant-prompt/SKILL.md) | A shorter prompt for OpenCode agents that work as personal assistants: a short assistant prompt instead of OpenCode's coding prompt, and its coding-only tools (sub-agents, to-do lists) switched off, about 3,000 tokens less in every request. |
 
-Install `add-manager-backup` first; the panel builds on it. `add-voice` stands alone.
+Install `add-manager-backup` first; the panel builds on it. `add-voice` and `add-assistant-prompt` stand alone.
 
 ## Guide
 

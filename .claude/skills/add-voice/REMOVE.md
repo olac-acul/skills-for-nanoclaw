@@ -15,6 +15,8 @@ container/agent-runner/src/prompt-attachments.test.ts
 container/agent-runner/src/prompt-attachments.ts
 container/agent-runner/src/voice-compaction.test.ts
 container/agent-runner/src/voice-compaction.ts
+container/agent-runner/src/voice-instructions-filter.test.ts
+container/agent-runner/src/voice-instructions-filter.ts
 scripts/tsconfig.voice-setup.json
 scripts/voice-core-seams.mjs
 scripts/voice-setup.ts
@@ -28,7 +30,7 @@ src/channels/voice.ts
 ```
 
 4. Uninstall the dependencies if nothing else uses them: `pnpm remove ws @types/ws`.
-5. The core changes (`in_reply_to` through `delivery.ts`, `adapter.ts` and `channel-registry.ts`; attachments through `poll-loop.ts` and `providers/types.ts`) are harmless without the channel and can stay. The tool availability (`mcp-tools/types.ts`, `mcp-tools/server.ts`) does nothing without a tool that uses it. To take them out, revert those seven files with `git checkout` if your tree was clean when they were applied. The summary announcement in the OpenCode provider (`providers/opencode-turn.ts`) imports `voice-compaction.ts`: revert that file too before deleting `voice-compaction.ts`, or the agent image no longer builds.
+5. The core changes (`in_reply_to` through `delivery.ts`, `adapter.ts` and `channel-registry.ts`; attachments through `poll-loop.ts` and `providers/types.ts`) are harmless without the channel and can stay. The tool availability (`mcp-tools/types.ts`, `mcp-tools/server.ts`) does nothing without a tool that uses it. To take them out, revert those seven files with `git checkout` if your tree was clean when they were applied. In the OpenCode provider, `providers/opencode-turn.ts` imports `voice-compaction.ts` and `providers/opencode-config.ts` imports `voice-instructions-filter.ts`: revert those two files too before deleting them, or the agent no longer starts.
 6. Remove `VOICE_ENABLED`, `VOICE_AUTH_TOKEN`, `VOICE_BIND_HOST`, `VOICE_CHANNEL_PORT` and `OPENCODE_MODEL_INPUT_MODALITIES` (if you set it for photos) from `.env`, and delete `data/voice-push.json`.
 7. Remove the wiring: `ncl wirings delete` and `ncl messaging-groups delete` for the `voice` channel, the user `voice:default`, and `groups/voice/` if it was made for this channel.
 8. `pnpm run build` and restart the service.

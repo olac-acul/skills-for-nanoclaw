@@ -33,7 +33,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const SKILLS_REPO = path.resolve(HERE, '..');
-export const OUR_SKILLS = ['add-manager-backup', 'add-manager-panel', 'add-voice'];
+export const OUR_SKILLS = ['add-manager-backup', 'add-manager-panel', 'add-voice', 'add-assistant-prompt'];
 
 // ---------------------------------------------------------------------------
 // Pure helpers (tested)
@@ -258,7 +258,8 @@ function settleLockConflicts(stageRoot) {
   return commit.status === 0 ? null : `could not commit the merge: ${(commit.stderr || commit.stdout).slice(-300)}`;
 }
 
-/** Copy this repository's skills into `dir`, put the panel's import in place and check the voice core changes. */
+/** Copy this repository's skills into `dir`, put the panel's import in place and check the core changes of the voice
+ *  channel and of the assistant prompt. */
 function refreshSkills(dir) {
   for (const skill of OUR_SKILLS) {
     const source = path.join(SKILLS_REPO, '.claude', 'skills', skill);
@@ -271,6 +272,8 @@ function refreshSkills(dir) {
   if (barrel.status !== 0) throw new Error(`the panel's import could not be placed: ${barrel.stderr || barrel.stdout}`);
   const seams = run('node', ['scripts/voice-core-seams.mjs'], { cwd: dir });
   if (seams.status !== 0) throw new Error(`the voice channel's core changes no longer fit this upstream:\n${seams.stderr || seams.stdout}`);
+  const prompt = run('node', ['scripts/assistant-prompt-seams.mjs'], { cwd: dir });
+  if (prompt.status !== 0) throw new Error(`the assistant prompt's changes no longer fit this upstream:\n${prompt.stderr || prompt.stdout}`);
 }
 
 // ---------------------------------------------------------------------------

@@ -10,8 +10,8 @@
 #      login, and gives it passwordless sudo for the installation (upstream's installer needs it);
 #   2. gets NanoClaw (newest stable release) and this repository into that user's home;
 #   3. runs upstream's own interactive installer, `nanoclaw.sh` (model provider, credential gateway, first channel);
-#   4. applies the skills of this repository: backups, the manager panel, and, if you use it, the NanoVoice voice
-#      channel;
+#   4. applies the skills of this repository: backups, the manager panel, the shorter assistant prompt for OpenCode,
+#      and, if you use it, the NanoVoice voice channel;
 #   5. asks where the panel listens and prints its one-time setup code; sets up weekly backups; sets up the voice
 #      channel and its phone pairing;
 #   6. runs the interactive `setup.sh` of any extra skill folder given with --extra (for example private skills);
@@ -193,8 +193,8 @@ INFO
 }
 
 step_skills() {
-  say "4. Backups, the manager panel and the voice channel"
-  local skills="add-manager-backup,add-manager-panel"
+  say "4. Backups, the manager panel, the assistant prompt and the voice channel"
+  local skills="add-manager-backup,add-manager-panel,add-assistant-prompt"
   note "The phone app NanoVoice talks to NanoClaw through a voice channel (needs a VPN or private network the phone reaches)."
   if ask_yes "Install the voice channel for NanoVoice?"; then
     skills="$skills,add-voice"

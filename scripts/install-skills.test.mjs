@@ -13,7 +13,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 test('applies the skills in the order the panel needs, whatever order they are named in', () => {
   assert.deepEqual(parseArgs(['--install', '/x']).skills, DEFAULT_SKILLS);
-  assert.deepEqual(parseArgs(['--install', '/x', '--skills', 'add-voice,add-manager-panel,add-manager-backup']).skills, DEFAULT_SKILLS);
+  assert.deepEqual(parseArgs(['--install', '/x', '--skills', 'add-assistant-prompt,add-voice,add-manager-panel,add-manager-backup']).skills, DEFAULT_SKILLS);
   assert.deepEqual(parseArgs(['--install', '/x', '--skills', 'add-manager-backup']).skills, ['add-manager-backup']);
   assert.equal(parseArgs(['--install', '/x', '--no-restart']).restart, false);
 });

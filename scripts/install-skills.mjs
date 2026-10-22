@@ -3,7 +3,7 @@
  * Apply this repository's skills to a NanoClaw install with upstream's own skill engine, then record the new state
  * and restart the service. It is what `compose.mjs` does on a throw-away checkout, done on a real install.
  *
- *   node scripts/install-skills.mjs --install DIR [--skills add-manager-backup,add-manager-panel,add-voice] [--no-restart]
+ *   node scripts/install-skills.mjs --install DIR [--skills add-manager-backup,add-manager-panel,add-voice,add-assistant-prompt] [--no-restart]
  *
  * It is also how newer versions of these skills reach an install whose NanoClaw has not changed (when
  * `update-install.mjs` finds nothing new upstream): run it again from an updated checkout of this repository.
@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { APPLY_RUNNER } from './skill-runner.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const DEFAULT_SKILLS = ['add-manager-backup', 'add-manager-panel', 'add-voice'];
+export const DEFAULT_SKILLS = ['add-manager-backup', 'add-manager-panel', 'add-voice', 'add-assistant-prompt'];
 
 function fail(message) {
   console.error(`install-skills: ${message}`);
