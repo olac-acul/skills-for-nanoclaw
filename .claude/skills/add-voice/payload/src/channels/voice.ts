@@ -70,6 +70,10 @@ const PAIR_MAX_ATTEMPTS = 5;
 /** 16 characters of Crockford base32 (no I, L, O, U): 80 random bits. */
 const PAIR_CODE = /^[0-9A-HJKMNP-TV-Z]{16}$/;
 const FAILED_LOGIN_WINDOW_MS = 10 * 60_000;
+/** How often, at most, the time of the last message is written to disk. */
+const ACTIVITY_SAVE_EVERY_MS = 60_000;
+/** VOICE_IDLE_RESET_MINUTES when it is not set: a pause this long starts a new conversation. */
+const DEFAULT_IDLE_RESET_MINUTES = 30;
 
 /** Single-operator transport wired manually: every line is for the agent, no threads or mentions. */
 const VOICE_DEFAULTS: ChannelDefaults = {
@@ -118,10 +122,23 @@ export interface VoiceAdapterOptions {
   wakeMinIntervalMs?: number;
   /** 'public' (default): only https endpoints on public addresses. 'any': tests only, a local endpoint. */
   pushPolicy?: 'public' | 'any';
-  /** Starts a new conversation for this chat; returns how many sessions were reset. Tests replace it. */
-  resetConversation?: (chatId: string) => Promise<number>;
+  /**
+   * Starts a new conversation for this chat with a `/clear` row of id `clearId` (generated when absent); returns how
+   * many sessions were reset. Tests replace it.
+   */
+  resetConversation?: (chatId: string, clearId?: string) => Promise<number>;
   /** Starts the agent's container ahead of a request; returns how many sessions were woken. Tests replace it. */
   warmUp?: (chatId: string) => Promise<number>;
+  /**
+   * A message that comes after this long without any message either way starts a new conversation first, as the app's
+   * "new conversation" does: the agent then answers on a short context instead of rereading hours or days of it.
+   * 0 (the default here; VOICE_IDLE_RESET_MINUTES for the channel) keeps the conversation until the app resets it.
+   */
+  idleResetMs?: number;
+  /** Where the time of the last message is remembered across restarts; null keeps it in memory only. */
+  activityPath?: string | null;
+  /** The clock for the pause above. Tests replace it. */
+  now?: () => number;
 }
 
 export type VoiceAdapter = ChannelAdapter & { port(): number };
@@ -291,7 +308,10 @@ function tokenMatches(header: string | undefined, token: string): boolean {
  * and it can only reset this chat's own conversation (memory and other chats are untouched). A wiring whose session
  * is shared with the agent's other channels is refused: clearing it would reset those conversations too.
  */
-export async function clearVoiceConversation(chatId: string): Promise<number> {
+export async function clearVoiceConversation(
+  chatId: string,
+  clearId = `voice-clear-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+): Promise<number> {
   const mg = await getMessagingGroupByPlatform('voice', chatId);
   if (!mg) return 0;
   const wirings = await getMessagingGroupAgents(mg.id);
@@ -302,7 +322,7 @@ export async function clearVoiceConversation(chatId: string): Promise<number> {
     const session = await findSessionForAgent(wiring.agent_group_id, mg.id, null);
     if (!session) continue; // no conversation yet: nothing to reset
     await writeSessionMessage(session.agent_group_id, session.id, {
-      id: `voice-clear-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      id: clearId,
       kind: 'chat',
       timestamp: new Date().toISOString(),
       platformId: chatId,
@@ -404,6 +424,12 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
   const resetConversation = opts.resetConversation ?? clearVoiceConversation;
   const warmUp = opts.warmUp ?? warmVoiceSessions;
   let lastWarm = 0;
+  const idleResetMs = opts.idleResetMs ?? 0;
+  const clock = opts.now ?? Date.now;
+  let lastActivityAt = loadActivity();
+  let activitySavedAt = 0;
+  /** A reset after a pause still being written: messages wait for it, so they land after the `/clear`. */
+  let resetting: Promise<void> | null = null;
 
   let server: http.Server | null = null;
   let wss: WebSocketServer | null = null;
@@ -440,6 +466,48 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
   // travel through a third-party push server): it only makes the app wake up and fetch the buffered messages from here.
   let pushEndpoint: string | null = loadPushEndpoint();
   let lastWakeAt = 0;
+
+  function loadActivity(): number {
+    if (!opts.activityPath) return 0;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(opts.activityPath, 'utf8')) as { last_message_at?: unknown };
+      return typeof parsed.last_message_at === 'number' ? parsed.last_message_at : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** A message went one way or the other. Written to disk at most once a minute: the pause is measured in minutes. */
+  function noteActivity(): void {
+    lastActivityAt = clock();
+    if (!opts.activityPath || lastActivityAt - activitySavedAt < ACTIVITY_SAVE_EVERY_MS) return;
+    activitySavedAt = lastActivityAt;
+    try {
+      fs.mkdirSync(path.dirname(opts.activityPath), { recursive: true });
+      fs.writeFileSync(opts.activityPath, JSON.stringify({ last_message_at: lastActivityAt }), { mode: 0o600 });
+    } catch (err) {
+      log.warn('Voice could not persist the time of the last message', { err });
+    }
+  }
+
+  /**
+   * The conversation starts over before a message that comes after a long pause; a failure leaves it as it is. The
+   * runner takes the batch's reply route from its first row, the `/clear`: its id is tied to the request it comes
+   * with, so the answer goes back into that request instead of arriving as a notification.
+   */
+  function resetAfterPause(silentMs: number, exchangeId: string): Promise<void> {
+    const clearId = `voice-clear-${clock().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    remember(inboundExchange, clearId, exchangeId);
+    return resetConversation(chatId, clearId)
+      .then((count) => {
+        clearsPending += count;
+        log.info('Voice conversation reset after a pause', {
+          sessions: count,
+          silentMinutes: Math.round(silentMs / 60_000),
+        });
+      })
+      .catch((err) => log.warn('Voice reset after a pause failed; the conversation goes on', { err: String(err) }));
+  }
 
   function loadPushEndpoint(): string | null {
     if (!opts.pushStatePath) return null;
@@ -607,7 +675,19 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       const old = exchanges.get(id);
       if (old) closeExchange(old, false);
       remember(exchanges, id, { id, deltas: 0, timer: null, openActions: 0, closed: false, cancelled: false });
-      feedAgent(text, `voice-${id}`, id, image);
+      const previous = lastActivityAt; // 0: nothing known yet (first message ever, or no state file), no reset
+      const silentMs = clock() - previous;
+      noteActivity();
+      if (idleResetMs > 0 && previous > 0 && silentMs > idleResetMs) {
+        const reset = resetAfterPause(silentMs, id);
+        resetting = reset;
+        void reset.then(() => {
+          if (resetting === reset) resetting = null;
+        });
+      }
+      const feed = () => feedAgent(text, `voice-${id}`, id, image);
+      if (resetting) void resetting.then(feed);
+      else feed();
       return;
     }
 
@@ -967,6 +1047,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       }
       const out = readOutbound(message.content);
       if (!out || (!out.text && !out.action && !out.working)) return undefined;
+      noteActivity();
       const { action, working } = out;
       if (clearsPending > 0 && out.text === SESSION_CLEARED_TEXT && !action) {
         clearsPending--;
@@ -1040,6 +1121,16 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
   };
 }
 
+/** VOICE_IDLE_RESET_MINUTES: a whole number of minutes, 0 to turn the reset off; anything else gives the default. */
+export function idleResetMinutes(raw: string | undefined): number {
+  const value = raw?.trim() ?? '';
+  if (!/^\d{1,5}$/.test(value)) {
+    if (value) log.warn('Ignoring invalid VOICE_IDLE_RESET_MINUTES', { value });
+    return DEFAULT_IDLE_RESET_MINUTES;
+  }
+  return parseInt(value, 10);
+}
+
 registerChannelAdapter('voice', {
   factory: () => {
     const env = readEnvFile([
@@ -1048,6 +1139,7 @@ registerChannelAdapter('voice', {
       'VOICE_BIND_HOST',
       'VOICE_AUTH_TOKEN',
       'VOICE_PLATFORM_ID',
+      'VOICE_IDLE_RESET_MINUTES',
     ]);
     const get = (k: string) => process.env[k] || env[k];
     const enabled = get('VOICE_ENABLED');
@@ -1070,6 +1162,8 @@ registerChannelAdapter('voice', {
       pushStatePath: path.join(DATA_DIR, 'voice-push.json'),
       statusPath: path.join(DATA_DIR, 'voice-status.json'),
       pairingPath: path.join(DATA_DIR, 'voice-pairing.json'),
+      idleResetMs: idleResetMinutes(get('VOICE_IDLE_RESET_MINUTES')) * 60_000,
+      activityPath: path.join(DATA_DIR, 'voice-activity.json'),
     });
   },
   defaults: VOICE_DEFAULTS,

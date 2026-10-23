@@ -13,6 +13,7 @@ import {
   cleanDeviceName,
   createVoiceAdapter,
   hashPairingCode,
+  idleResetMinutes,
   isPrivateAddress,
   readOutbound,
   stripMarkers,
@@ -390,6 +391,126 @@ describe('voice adapter', () => {
     await h.adapter.deliver('voice:default', null, { kind: 'chat', content: { text: 'Session cleared.' } });
     await until(() => received.some((m) => m.type === 'notify'));
     expect(received.filter((m) => m.type === 'notify')).toEqual([{ type: 'notify', text: 'Session cleared.' }]);
+  });
+
+  it('starts a new conversation by itself before a message that comes after a long pause', async () => {
+    let t = 1_000_000;
+    const events: string[] = [];
+    const clearIds: string[] = [];
+    const h = await start({
+      idleResetMs: 30 * 60_000,
+      now: () => t,
+      resetConversation: async (_chatId, clearId) => {
+        if (clearId) clearIds.push(clearId);
+        await new Promise((r) => setTimeout(r, 20)); // the /clear takes a moment to be written
+        events.push('reset');
+        return 1;
+      },
+    });
+    const { ws, received } = await connect(h);
+    ws.send(hello());
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'prima' }));
+    await until(() => h.inbound.length === 1);
+    t += 10 * 60_000; // an answer ten minutes later counts as activity too
+    await h.adapter.deliver('voice:default', null, { kind: 'chat', content: { text: 'Risposta.' } });
+    t += 29 * 60_000; // 29 minutes after the answer: same conversation
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm2', text: 'seguito' }));
+    await until(() => h.inbound.length === 2);
+    expect(events).toEqual([]);
+
+    t += 31 * 60_000;
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm3', text: 'dopo la pausa' }));
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm4', text: 'subito dopo' }));
+    await until(() => h.inbound.length === 4);
+    h.inbound.slice(2).forEach((m) => events.push(m.text));
+    // both messages wait for the reset, and keep their order
+    expect(events).toEqual(['reset', 'dopo la pausa', 'subito dopo']);
+    // the app is not told (it only waits for conversation_reset after its own request) and the runner's
+    // "Session cleared." does not reach it
+    await h.adapter.deliver('voice:default', null, { kind: 'chat', content: { text: 'Session cleared.' } });
+    // the runner routes the batch's answer by its first row, the /clear: it belongs to the request m3
+    expect(clearIds).toHaveLength(1);
+    const before = received.length;
+    await h.adapter.deliver('voice:default', null, {
+      kind: 'chat',
+      content: { text: 'Ecco la risposta.' },
+      inReplyTo: clearIds[0],
+    });
+    await until(() => received.some((m) => m.type === 'delta'));
+    expect(received.find((m) => m.type === 'delta')).toMatchObject({ reply_to: 'm3', text: 'Ecco la risposta.' });
+    expect(received.slice(before).some((m) => m.type === 'notify')).toBe(false);
+    expect(received.some((m) => m.type === 'conversation_reset')).toBe(false);
+  });
+
+  it('never resets by itself with the pause turned off, nor on the first message it knows of', async () => {
+    let t = 1_000_000;
+    let resets = 0;
+    const off = await start({ idleResetMs: 0, now: () => t, resetConversation: async () => (resets++, 1) });
+    const on = await start({ idleResetMs: 60_000, now: () => t, resetConversation: async () => (resets++, 1) });
+    for (const h of [off, on]) {
+      const { ws } = await connect(h);
+      ws.send(hello());
+      ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'uno' }));
+      await until(() => h.inbound.length === 1);
+    }
+    t += 3_600_000;
+    const { ws } = await connect(off);
+    ws.send(hello());
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm2', text: 'due' }));
+    await until(() => off.inbound.length === 2);
+    expect(resets).toBe(0);
+  });
+
+  it('a reset after a pause that fails leaves the conversation and still delivers the message', async () => {
+    let t = 1_000_000;
+    const h = await start({
+      idleResetMs: 60_000,
+      now: () => t,
+      resetConversation: async () => {
+        throw new Error('shared session');
+      },
+    });
+    const { ws } = await connect(h);
+    ws.send(hello());
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'uno' }));
+    await until(() => h.inbound.length === 1);
+    t += 120_000;
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm2', text: 'due' }));
+    await until(() => h.inbound.length === 2);
+  });
+
+  it('remembers the last message across restarts', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-activity-'));
+    const activityPath = path.join(dir, 'voice-activity.json');
+    let t = 1_000_000;
+    let resets = 0;
+    const options = { idleResetMs: 60_000, now: () => t, activityPath, resetConversation: async () => (resets++, 1) };
+    const first = await start(options);
+    const a = await connect(first);
+    a.ws.send(hello());
+    a.ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'uno' }));
+    await until(() => first.inbound.length === 1);
+    expect(JSON.parse(fs.readFileSync(activityPath, 'utf8'))).toEqual({ last_message_at: 1_000_000 });
+    expect(fs.statSync(activityPath).mode & 0o777).toBe(0o600);
+    await first.adapter.teardown();
+
+    t += 120_000; // the host restarted in between
+    const second = await start(options);
+    const b = await connect(second);
+    b.ws.send(hello());
+    b.ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm2', text: 'due' }));
+    await until(() => second.inbound.length === 1);
+    expect(resets).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reads VOICE_IDLE_RESET_MINUTES: minutes, 0 to turn it off, the default otherwise', () => {
+    expect(idleResetMinutes(undefined)).toBe(30);
+    expect(idleResetMinutes('')).toBe(30);
+    expect(idleResetMinutes(' 45 ')).toBe(45);
+    expect(idleResetMinutes('0')).toBe(0);
+    expect(idleResetMinutes('30m')).toBe(30);
+    expect(idleResetMinutes('-5')).toBe(30);
   });
 
   it('reports a failed reset', async () => {

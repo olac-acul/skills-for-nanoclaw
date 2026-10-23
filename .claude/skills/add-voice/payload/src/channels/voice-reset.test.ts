@@ -95,6 +95,18 @@ describe('clearVoiceConversation', () => {
     expect(vi.mocked(requestWake).mock.calls[0][0].id).toBe(voice.id);
   });
 
+  it('writes the /clear under the id it is given, so its reply can be tied to a request', async () => {
+    await chat('mg-voice', 'voice', 'voice:default');
+    const { session } = await resolveSession('ag-1', 'mg-voice', null, 'shared');
+    expect(await clearVoiceConversation('voice:default', 'voice-clear-test1')).toBe(1);
+    const db = new Database(inboundDbPath('ag-1', session.id), { readonly: true });
+    try {
+      expect(db.prepare('SELECT id FROM messages_in').all()).toEqual([{ id: 'voice-clear-test1' }]);
+    } finally {
+      db.close();
+    }
+  });
+
   it('does nothing when the chat has no conversation yet', async () => {
     await chat('mg-voice', 'voice', 'voice:default');
     expect(await clearVoiceConversation('voice:default')).toBe(0);
