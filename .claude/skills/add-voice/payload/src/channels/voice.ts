@@ -457,6 +457,12 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
   const actionExchange = new Map<string, string>();
   const pendingNotify: string[] = [];
   let clearsPending = 0; // "Session cleared." replies still to swallow
+  /**
+   * Ids of `/clear` rows written for the app's "new conversation" and not yet tied to a request. When the container is
+   * not running, the `/clear` and the next message reach the runner together, and it routes the answer by the first row,
+   * the `/clear`: tied to that next request, the answer goes back into it instead of arriving as a notification.
+   */
+  let unboundClears: string[] = [];
   // The runner sometimes hands over the same final text twice (once for the request, once more after an action
   // result): the phone would show it twice. The last text sent and when, to drop an identical one right after.
   let lastText: { text: string; at: number; exchange: string | null } | null = null;
@@ -675,6 +681,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       const old = exchanges.get(id);
       if (old) closeExchange(old, false);
       remember(exchanges, id, { id, deltas: 0, timer: null, openActions: 0, closed: false, cancelled: false });
+      for (const clearId of unboundClears.splice(0)) remember(inboundExchange, clearId, id);
       const previous = lastActivityAt; // 0: nothing known yet (first message ever, or no state file), no reset
       const silentMs = clock() - previous;
       noteActivity();
@@ -741,7 +748,9 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
     if (msg.type === 'new_conversation') {
       // Whatever was being answered is dropped: the app has already cleared its screen.
       closeAll();
-      void resetConversation(chatId)
+      const clearId = `voice-clear-${clock().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      unboundClears = [clearId];
+      void resetConversation(chatId, clearId)
         .then((count) => {
           clearsPending += count;
           log.info('Voice conversation reset', { sessions: count });

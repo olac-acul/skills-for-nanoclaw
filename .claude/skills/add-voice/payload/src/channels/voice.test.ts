@@ -513,6 +513,26 @@ describe('voice adapter', () => {
     expect(idleResetMinutes('-5')).toBe(30);
   });
 
+  it("ties the app's new conversation to the next request, when the runner answers both together", async () => {
+    const clearIds: string[] = [];
+    const h = await start({ resetConversation: async (_chatId, clearId) => (clearIds.push(clearId ?? ''), 1) });
+    const { ws, received } = await connect(h);
+    ws.send(hello());
+    ws.send(JSON.stringify({ type: 'new_conversation' }));
+    await until(() => received.some((m) => m.type === 'conversation_reset'));
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'parlami di Jobs' }));
+    await until(() => h.inbound.length === 1);
+    // the container was not running: the runner got the /clear and the message in one batch and routed by the /clear
+    await h.adapter.deliver('voice:default', null, {
+      kind: 'chat',
+      content: { text: 'Steve Jobs fondò Apple.' },
+      inReplyTo: clearIds[0],
+    });
+    await until(() => received.some((m) => m.type === 'done'));
+    expect(received.find((m) => m.type === 'delta')).toMatchObject({ reply_to: 'm1', text: 'Steve Jobs fondò Apple.' });
+    expect(received.some((m) => m.type === 'notify')).toBe(false);
+  });
+
   it('reports a failed reset', async () => {
     const h = await start({
       resetConversation: async () => {
