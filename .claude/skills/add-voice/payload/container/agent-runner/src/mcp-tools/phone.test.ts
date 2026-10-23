@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { initTestSessionDb, closeSessionDb, getInboundDb } from '../mailbox/sqlite/connection.js';
 import { getUndeliveredMessages } from '../db/messages-out.js';
 import { setCurrentReplyRoute } from '../db/session-state.js';
+import { askUserQuestion, sendCard } from './interactive.js';
 import {
   phoneBattery,
   phoneCalendarDraft,
@@ -490,5 +491,21 @@ describe('the phone tools only in the voice session', () => {
     expect(inVoiceSession()).toBe(false);
     route('cli', 'local');
     expect(inVoiceSession()).toBe(false);
+  });
+
+  it("hide NanoClaw's card and question tools in the voice app's session only", () => {
+    // a card reached the app as text, and the agent wrote the answer again in its final block
+    route('voice', 'voice:default');
+    expect(askUserQuestion.available?.()).toBe(false);
+    expect(sendCard.available?.()).toBe(false);
+    for (const [channel, platform] of [
+      ['telegram', 'telegram:1'],
+      ['cli', 'local'],
+      [null, null],
+    ]) {
+      route(channel, platform);
+      expect(askUserQuestion.available?.()).toBe(true);
+      expect(sendCard.available?.()).toBe(true);
+    }
   });
 });

@@ -10,6 +10,7 @@ import { getAllDestinations } from '../destinations.js';
 import { writeMessageOut } from '../db/messages-out.js';
 import { getCurrentInReplyTo, getCurrentReplyRoute } from '../db/session-state.js';
 import { getSessionRouting } from '../db/session-routing.js';
+import { askUserQuestion, sendCard } from './interactive.js';
 import { registerTools } from './server.js';
 import type { McpToolDefinition } from './types.js';
 
@@ -722,3 +723,22 @@ const phoneTools: McpToolDefinition[] = [
   phoneImageSearch,
 ];
 registerTools(phoneTools.map((tool) => ({ ...tool, available: inVoiceSession })));
+
+/** The voice app's own session (not one bound to no chat). */
+export function onVoiceChannel(): boolean {
+  try {
+    return getSessionRouting().channel_type === 'voice';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The voice app has no buttons: a card or a question with options would reach it as text, a second version of the
+ * answer the agent then writes again in its final block. In the voice app's session NanoClaw's two button tools are
+ * not offered (they stay everywhere else).
+ */
+for (const tool of [askUserQuestion, sendCard]) {
+  const before = tool.available;
+  tool.available = () => !onVoiceChannel() && (before?.() ?? true);
+}
