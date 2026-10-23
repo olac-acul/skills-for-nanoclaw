@@ -11,6 +11,8 @@ Reverses what the skill added. The wiring rows and the sender are your runtime d
 ```text files
 container/agent-runner/src/mcp-tools/phone.test.ts
 container/agent-runner/src/mcp-tools/phone.ts
+container/agent-runner/src/mcp-tools/weather.test.ts
+container/agent-runner/src/mcp-tools/weather.ts
 container/agent-runner/src/prompt-attachments.test.ts
 container/agent-runner/src/prompt-attachments.ts
 container/agent-runner/src/voice-compaction.test.ts

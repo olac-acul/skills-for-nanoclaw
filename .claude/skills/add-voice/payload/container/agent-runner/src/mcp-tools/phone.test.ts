@@ -34,6 +34,7 @@ import {
   phoneVolume,
   voiceWorking,
   inVoiceSession,
+  onVoiceChannel,
 } from './phone.js';
 
 function seedVoiceDestination(): void {
@@ -498,6 +499,7 @@ describe('the phone tools only in the voice session', () => {
     route('voice', 'voice:default');
     expect(sendCard.available?.()).toBe(false);
     expect(askUserQuestion.available?.() ?? true).toBe(true); // the app shows it as a choice
+    expect(onVoiceChannel()).toBe(true); // weather_forecast is offered only here
     for (const [channel, platform] of [
       ['telegram', 'telegram:1'],
       ['cli', 'local'],
@@ -506,6 +508,7 @@ describe('the phone tools only in the voice session', () => {
       route(channel, platform);
       expect(askUserQuestion.available?.() ?? true).toBe(true);
       expect(sendCard.available?.()).toBe(true);
+      expect(onVoiceChannel()).toBe(false);
     }
   });
 });

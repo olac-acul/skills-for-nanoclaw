@@ -11,6 +11,7 @@ import { writeMessageOut } from '../db/messages-out.js';
 import { getCurrentInReplyTo, getCurrentReplyRoute } from '../db/session-state.js';
 import { getSessionRouting } from '../db/session-routing.js';
 import { sendCard } from './interactive.js';
+import { weatherForecast } from './weather.js';
 import { registerTools } from './server.js';
 import type { McpToolDefinition } from './types.js';
 
@@ -738,5 +739,8 @@ export function onVoiceChannel(): boolean {
  * in its final block. In the voice app's session NanoClaw's `send_card` is not offered (it stays everywhere else).
  * `ask_user_question` is: the app shows it as a choice, one button per option (the `choose` action).
  */
+/** The weather, for the voice app's session only: the other channels keep searching the web as before. */
+registerTools([{ ...weatherForecast, available: onVoiceChannel }]);
+
 const cardAvailable = sendCard.available;
 sendCard.available = () => !onVoiceChannel() && (cardAvailable?.() ?? true);

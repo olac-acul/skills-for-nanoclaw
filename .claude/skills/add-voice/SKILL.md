@@ -10,6 +10,7 @@ Adds a native WebSocket channel for the [NanoVoice](https://github.com/olac-acul
 What it adds:
 
 - **The channel** (`src/channels/voice.ts`): replies, actions, "working" and "done" tied to the app request they belong to; a single checked photo per message; wake-up push through UnifiedPush for a phone that is off; "new conversation" and "warm-up" frames.
+- **Weather** for the voice app's conversation (`weather_forecast`): Italian places from 3B Meteo's page, places abroad (and Italian ones when 3B Meteo does not answer or its page cannot be read) from Open-Meteo, a few lines with the source. One tool call instead of a web search and several reads of a page too large to fit. Other channels are not affected.
 - **Phone tools** for the agent (`phone_set_timer`, `phone_set_alarm`, stopping, skipping and snoozing them, `phone_open_app`, `phone_call`, music, volume, flashlight, navigation, links, message and Signal drafts, notes, battery, reads of the calendar, position and notifications, calendar changes with approval on the phone, photo tools, `voice_working`). They exist in every agent container and fail with a clear message unless the session has a voice channel.
 - **Instructions** for the agent in the style of speech (short answers, numbers as digits, no private details read aloud), as one section between markers in the group's `instructions.prepend.md`, replaced as a whole on update.
 - **Two small changes to NanoClaw's core**, made by `scripts/voice-core-seams.mjs`: the id of the message an agent answers reaches the channel adapter, and the files the host staged for a turn (a photo) reach the provider. They are exact, anchored edits; if upstream changes that code the script changes nothing and says which edit no longer fits (see *Updating NanoClaw*).
@@ -31,6 +32,8 @@ If that check fails, this is not a NanoClaw install this skill fits: update Nano
 ```nc:copy
 payload/container/agent-runner/src/mcp-tools/phone.test.ts -> container/agent-runner/src/mcp-tools/phone.test.ts
 payload/container/agent-runner/src/mcp-tools/phone.ts -> container/agent-runner/src/mcp-tools/phone.ts
+payload/container/agent-runner/src/mcp-tools/weather.test.ts -> container/agent-runner/src/mcp-tools/weather.test.ts
+payload/container/agent-runner/src/mcp-tools/weather.ts -> container/agent-runner/src/mcp-tools/weather.ts
 payload/container/agent-runner/src/prompt-attachments.test.ts -> container/agent-runner/src/prompt-attachments.test.ts
 payload/container/agent-runner/src/prompt-attachments.ts -> container/agent-runner/src/prompt-attachments.ts
 payload/container/agent-runner/src/voice-compaction.test.ts -> container/agent-runner/src/voice-compaction.test.ts
@@ -87,7 +90,7 @@ pnpm exec vitest run src/channels/voice
 ```
 
 ```nc:run effect:test
-(cd container/agent-runner && bun install --frozen-lockfile && bun test src/mcp-tools/phone.test.ts src/prompt-attachments.test.ts src/voice-compaction.test.ts src/voice-instructions-filter.test.ts)
+(cd container/agent-runner && bun install --frozen-lockfile && bun test src/mcp-tools/phone.test.ts src/mcp-tools/weather.test.ts src/prompt-attachments.test.ts src/voice-compaction.test.ts src/voice-instructions-filter.test.ts)
 ```
 
 ## Enable
