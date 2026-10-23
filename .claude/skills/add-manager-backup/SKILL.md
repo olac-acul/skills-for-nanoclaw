@@ -70,7 +70,7 @@ payload/src/modules/manager-backup/upstream-host.ts -> src/modules/manager-backu
 payload/src/modules/manager-backup/voice-files.test.ts -> src/modules/manager-backup/voice-files.test.ts
 ```
 
-If the host later refuses to start with an "upgrade tripwire" message, installing a skill changed the tree outside the setup flow; after the build and tests below pass, record it with `pnpm exec tsx scripts/upgrade-state.ts set` (see `docs/upgrade-recovery.md`).
+If the host later refuses to start with an "upgrade tripwire" message, a commit was made after NanoClaw's upgrade record (committing the installed skills by hand does that); after the build and tests below pass, record it with `pnpm exec tsx scripts/upgrade-state.ts set` (see `docs/upgrade-recovery.md`). `scripts/install-skills.mjs` of this repository commits and records by itself.
 
 Build, typecheck the script, and run the module's tests. The tests include one
 that migrates a real database and restores a backup into it, so they fail if a

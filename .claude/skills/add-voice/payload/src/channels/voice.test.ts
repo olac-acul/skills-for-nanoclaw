@@ -17,6 +17,7 @@ import {
   idleResetMinutes,
   isPrivateAddress,
   NO_CHOICES_TEXT,
+  NO_OPEN_REQUEST_TEXT,
   notDeclared,
   readOutbound,
   stripMarkers,
@@ -139,6 +140,8 @@ describe('product lookups and older apps', () => {
     // photo services switched off: neither is declared, and the agent is told where to switch them on
     expect(forThisApp(food, new Set())).toEqual(food);
     expect(notDeclared('product')).toContain('Servizi esterni per le foto');
+    // an app with food_product only is told it is too old, not that a switch is off
+    expect(notDeclared('product', new Set(['food_product']))).toContain('updating the app');
   });
 });
 
@@ -635,23 +638,59 @@ describe('voice adapter', () => {
     expect(h.answers[1]).toMatchObject({ questionId: 'q-2', value: expect.stringContaining('scollegata') });
   });
 
+  it('shows a question written as NanoClaw writes it, without in_reply_to, in the open request', async () => {
+    // ask_user_question's row carries no in_reply_to: the question belongs to the request the app is waiting on
+    const h = await start();
+    const { ws, received } = await connect(h);
+    ws.send(hello(['choose']));
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'aiutami a scegliere' }));
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver('voice:default', null, askQuestion);
+    await until(() => received.some((m) => m.type === 'action'));
+    expect(received.find((m) => m.type === 'action')).toMatchObject({ reply_to: 'm1', name: 'choose' });
+  });
+
   it('answers at once when the app cannot show choices, or no request is open', async () => {
     const h = await start();
     const { ws, received } = await connect(h);
     ws.send(hello(['set_timer'])); // an app older than `choose`
-    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'dove vado?' }));
-    await until(() => h.inbound.length === 1);
-    await h.adapter.deliver('voice:default', null, { ...askQuestion, inReplyTo: h.inbound[0].id });
-    await until(() => h.answers.length === 1);
-    expect(h.answers[0]).toMatchObject({ questionId: 'q-1', value: NO_CHOICES_TEXT });
-    // a question for no request at all (a scheduled task): the same, nothing shown
+    // a question for no request at all (a scheduled task): nothing shown, the agent is told why
     await h.adapter.deliver('voice:default', null, {
       ...askQuestion,
       content: { ...askQuestion.content, questionId: 'q-3' },
     });
+    await until(() => h.answers.length === 1);
+    expect(h.answers[0]).toMatchObject({ questionId: 'q-3', value: NO_OPEN_REQUEST_TEXT });
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'dove vado?' }));
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver('voice:default', null, askQuestion);
     await until(() => h.answers.length === 2);
+    expect(h.answers[1]).toMatchObject({ questionId: 'q-1', value: NO_CHOICES_TEXT });
     await new Promise((r) => setTimeout(r, 60));
     expect(received.some((m) => m.type === 'action' || m.type === 'notify')).toBe(false);
+  });
+
+  it("keeps the reply open for the agent's answer to an action the app does not have", async () => {
+    const h = await start();
+    const { ws, received } = await connect(h);
+    ws.send(hello(['set_timer']));
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'accendi la torcia' }));
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver('voice:default', null, {
+      kind: 'chat',
+      content: { text: '', voice_action: { name: 'flashlight', args: { on: true } } },
+      inReplyTo: h.inbound[0].id,
+    });
+    await until(() => h.inbound.length === 2); // the refusal, fed to the agent
+    await new Promise((r) => setTimeout(r, 120)); // longer than the 40 ms quiet period of this harness
+    await h.adapter.deliver('voice:default', null, {
+      kind: 'chat',
+      content: { text: 'La torcia è spenta nelle impostazioni.' },
+      inReplyTo: h.inbound[0].id,
+    });
+    await until(() => received.some((m) => m.type === 'delta'));
+    expect(received.find((m) => m.type === 'delta')).toMatchObject({ reply_to: 'm1' });
+    expect(received.some((m) => m.type === 'notify')).toBe(false);
   });
 
   it('reports a failed reset', async () => {

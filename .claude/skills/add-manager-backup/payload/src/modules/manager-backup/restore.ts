@@ -181,9 +181,20 @@ function pidAlive(pid: number): boolean {
  * A lock whose holder is gone (crash, kill) is taken over. The socket probe in `hostIsRunning`
  * stays: this only guards against other backup commands.
  */
+/**
+ * The transactions' folder, made private and invisible to Git: until a restore is committed or rolled back it holds
+ * the previous .env among other things, and a `git add -A` (an update's baseline commit) must never take it.
+ */
+export function ensureTxnDir(projectRoot: string): string {
+  const dir = path.join(projectRoot, TXN_DIR);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const ignore = path.join(dir, '.gitignore');
+  if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, '*\n', { mode: 0o600 });
+  return dir;
+}
+
 async function withLock<T>(host: BackupHost, fn: () => Promise<T>): Promise<T> {
-  const file = path.join(host.projectRoot, TXN_DIR, '.lock');
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const file = path.join(ensureTxnDir(host.projectRoot), '.lock');
   const token = `${process.pid} ${crypto.randomBytes(6).toString('hex')}\n`;
   for (let attempt = 0; ; attempt++) {
     try {

@@ -412,7 +412,10 @@ for (const [path, names] of [
  * What the agent learns about an action the app did not declare: switched off by the person (and where to switch it on,
  * so the agent can say it), or not known to this version of the app.
  */
-export function notDeclared(name: string): string {
+export function notDeclared(name: string, capabilities?: Set<string>): string {
+  // An app older than the product lookup by kind has food_product: the switch is on, the app is just too old.
+  if (name === 'product' && capabilities?.has('food_product'))
+    return 'this version of the NanoVoice app looks up only food barcodes. Tell the person in one sentence that updating the app adds the other kinds of products.';
   const path = SWITCH_OF[name];
   return path
     ? `${name} is switched off in the NanoVoice app. Tell the person in one sentence that they can switch it on in "${path}"; do not say the phone cannot do it.`
@@ -434,6 +437,9 @@ export function forThisApp(action: VoiceAction, capabilities: Set<string>): Voic
 /** What the agent's question gets when the app cannot show it: it then asks in its reply instead. */
 export const NO_CHOICES_TEXT =
   'nessuna scelta: questa app non mostra le domande con opzioni; fai la domanda nel testo della risposta e aspetta il messaggio della persona';
+/** What the agent's question gets when no request of the person is open (a scheduled task, a late question). */
+export const NO_OPEN_REQUEST_TEXT =
+  'nessuna scelta: la persona non ha una richiesta aperta a cui mostrare la domanda; se serve, chiedilo nel testo di un messaggio';
 
 /** An identical text this soon after the previous one is a repeat of the runner, not something new to say. */
 const REPEAT_WINDOW_MS = 30_000;
@@ -632,12 +638,20 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
     }
   }
 
+  /** The request the app is waiting on: the last one neither closed nor cancelled, if any. */
+  function openExchange(): Exchange | undefined {
+    let open: Exchange | undefined;
+    for (const ex of exchanges.values()) if (!ex.closed && !ex.cancelled) open = ex;
+    return open;
+  }
+
   /**
    * The agent's question, on the app as a `choose` card in the request it belongs to; the action result answers it.
    * Without an open request, or with an app that has no `choose`, it is answered at once: the agent asks in its reply.
    */
   function askQuestion(question: VoiceQuestion, live: Exchange | null): void {
-    if (!live || !capabilities?.has('choose')) return answerQuestion(question.id, NO_CHOICES_TEXT);
+    if (!live) return answerQuestion(question.id, NO_OPEN_REQUEST_TEXT);
+    if (!capabilities?.has('choose')) return answerQuestion(question.id, NO_CHOICES_TEXT);
     const actionId = `a${++actionCounter}`;
     remember(actionExchange, actionId, live.id);
     remember(questionActions, actionId, question);
@@ -1158,9 +1172,12 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       const ex = exchangeId ? exchanges.get(exchangeId) : undefined;
       // Before the check below: a question always gets an answer, or the agent's turn would wait for its timeout.
       if (out.question) {
+        // NanoClaw's ask_user_question writes its row without in_reply_to: it belongs to the request being answered,
+        // and the app has one open at a time (a new one replaces it).
+        const asking = ex ?? openExchange();
         askQuestion(
           out.question,
-          ex && !ex.cancelled && !ex.closed && client?.readyState === WebSocket.OPEN ? ex : null,
+          asking && !asking.cancelled && !asking.closed && client?.readyState === WebSocket.OPEN ? asking : null,
         );
         return id;
       }
@@ -1201,11 +1218,17 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
         send(client, { type: 'delta', reply_to: live.id, text: live.deltas > 0 ? ` ${text}` : text });
         live.deltas++;
       }
+      let refused = false; // an action the app does not have: the agent's answer to that comes in this reply
       if (action) {
         const actionId = `a${++actionCounter}`;
         const sent = forThisApp(action, capabilities!);
         if (!capabilities!.has(sent.name)) {
-          feedAgent(actionResultText(actionId, false, notDeclared(sent.name)), `voice-result-${actionId}`, live.id);
+          feedAgent(
+            actionResultText(actionId, false, notDeclared(sent.name, capabilities!)),
+            `voice-result-${actionId}`,
+            live.id,
+          );
+          refused = true;
         } else {
           remember(actionExchange, actionId, live.id);
           live.openActions++;
@@ -1221,7 +1244,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       // Working, or an action still out: the answer is still being prepared. Tell the app and keep the exchange open (up
       // to a limit) so the answer arrives in the same reply instead of after a `done`.
       if (working) send(client, { type: 'working', reply_to: live.id });
-      scheduleDone(live, working || live.openActions > 0 ? workingTimeoutMs : doneDelayMs);
+      scheduleDone(live, working || live.openActions > 0 ? workingTimeoutMs : refused ? followUpMs : doneDelayMs);
       return id;
     },
   };

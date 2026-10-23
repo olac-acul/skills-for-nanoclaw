@@ -3,14 +3,21 @@
  * Apply this repository's skills to a NanoClaw install with upstream's own skill engine, then record the new state
  * and restart the service. It is what `compose.mjs` does on a throw-away checkout, done on a real install.
  *
- *   node scripts/install-skills.mjs --install DIR [--skills add-manager-backup,add-manager-panel,add-voice,add-assistant-prompt] [--no-restart]
+ *   node scripts/install-skills.mjs --install DIR [--skills add-manager-backup,add-manager-panel,add-voice,add-assistant-prompt]
+ *                                    [--no-restart] [--no-commit]
  *
  * It is also how newer versions of these skills reach an install whose NanoClaw has not changed (when
  * `update-install.mjs` finds nothing new upstream): run it again from an updated checkout of this repository.
  *
  * Run it as the user that owns the install. Each skill checks its prerequisites, copies its files, builds and runs
- * its tests; applying one again is safe. Nothing is committed: `update-install.mjs` commits the skills as a baseline
- * before the first update, as it does for any install.
+ * its tests; applying one again is safe.
+ *
+ * Then the result is committed as one local commit and NanoClaw's upgrade marker is written for that commit: the host
+ * compares the marker with HEAD at every start and refuses to run when they differ, so a commit made after the marker
+ * would stop the next restart. Not when the install already had other uncommitted changes (they are not swept into the
+ * commit: commit them yourself, then `pnpm exec tsx scripts/upgrade-state.ts set`), nor with --no-commit. A marker
+ * that did not match already before is said out loud (upstream's setup can commit after stamping it, so a fresh
+ * install may start that way; a raw `git pull` would too): see upstream's docs/upgrade-recovery.md.
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -18,6 +25,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { APPLY_RUNNER } from './skill-runner.mjs';
+import { commitAll, markerMatches, stampMarker, treeIsClean } from './upgrade-marker.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_SKILLS = ['add-manager-backup', 'add-manager-panel', 'add-voice', 'add-assistant-prompt'];
@@ -28,12 +36,13 @@ function fail(message) {
 }
 
 export function parseArgs(argv) {
-  const flags = { install: null, skills: DEFAULT_SKILLS, restart: true };
+  const flags = { install: null, skills: DEFAULT_SKILLS, restart: true, commit: true };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--install') flags.install = argv[++i];
     else if (arg === '--skills') flags.skills = (argv[++i] ?? '').split(',').map((s) => s.trim()).filter(Boolean);
     else if (arg === '--no-restart') flags.restart = false;
+    else if (arg === '--no-commit') flags.commit = false;
     else throw new Error(`unknown argument ${JSON.stringify(arg)}`);
   }
   if (!flags.install) throw new Error('--install DIR is required');
@@ -78,6 +87,9 @@ function main() {
   for (const file of ['package.json', 'scripts/skill-apply.ts', 'scripts/skill-directives.ts', 'src/cli/client.ts'])
     if (!fs.existsSync(path.join(install, file))) fail(`${install} is not a NanoClaw install (${file} is missing)`);
   process.umask(0o022); // some of upstream's tests depend on it; a login shell often has 002
+  // Read before anything changes: whether the skills can be committed alone, and whether the marker was in order.
+  const wasClean = treeIsClean(install);
+  const markerWasCurrent = markerMatches(install);
 
   fs.mkdirSync(path.join(install, '.claude', 'skills'), { recursive: true });
   // A skill already installed is refreshed first (the engine's install mode never replaces a file that exists).
@@ -107,9 +119,31 @@ function main() {
     for (const folder of foldersWithVoiceSection(install))
       run('pnpm', ['exec', 'tsx', 'scripts/voice-setup.ts', 'instructions', '--folder', folder], install);
 
-  // The install changed outside upstream's own flows: record it, or the host refuses to start (the upgrade tripwire).
-  run('pnpm', ['exec', 'tsx', 'scripts/upgrade-state.ts', 'set'], install);
   run('pnpm', ['run', 'build'], install);
+
+  // The marker belongs to HEAD: commit the skills first, then record that commit.
+  if (!markerWasCurrent) {
+    console.warn(
+      '\ninstall-skills: NOTE: the upgrade marker did not match this checkout already before the skills were installed. ' +
+        'Right after upstream\'s setup that is expected; otherwise the code changed outside the sanctioned paths ' +
+        '(a raw `git pull`?): check `git log` against `pnpm exec tsx scripts/upgrade-state.ts get` (docs/upgrade-recovery.md).',
+    );
+  }
+  if (!flags.commit) {
+    console.log('\ninstall-skills: --no-commit: commit the changes, then run `pnpm exec tsx scripts/upgrade-state.ts set`.');
+  } else if (!wasClean) {
+    console.log(
+      '\ninstall-skills: the install had other uncommitted changes, so nothing was committed. Commit them together with ' +
+        'the skills, then run `pnpm exec tsx scripts/upgrade-state.ts set` before the next restart.',
+    );
+  } else {
+    const repoHead = spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: repo, encoding: 'utf8' }).stdout.trim() || 'unknown';
+    const committed = commitAll(install, `local: skills installed with install-skills.mjs (${flags.skills.join(', ')}; skills-for-nanoclaw ${repoHead})`);
+    if (committed) fail(`the skills are applied but could not be committed: ${committed}`);
+    const stamped = stampMarker(install, 'skills');
+    if (stamped) fail(`the skills are committed but the upgrade marker could not be written: ${stamped}`);
+    console.log('\ninstall-skills: committed (if anything changed), and the upgrade marker records HEAD');
+  }
   if (flags.restart) {
     if (!fs.existsSync(path.join(install, 'setup', 'lib', 'restart.sh'))) fail('setup/lib/restart.sh is missing: restart NanoClaw by hand');
     run('bash', ['setup/lib/restart.sh'], install);

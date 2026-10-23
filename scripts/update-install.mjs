@@ -31,6 +31,8 @@ import path from 'node:path';
 import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 
+import { commitAll, markerMatches, stampMarker } from './upgrade-marker.mjs';
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const SKILLS_REPO = path.resolve(HERE, '..');
 export const OUR_SKILLS = ['add-manager-backup', 'add-manager-panel', 'add-voice', 'add-assistant-prompt'];
@@ -258,22 +260,36 @@ function settleLockConflicts(stageRoot) {
   return commit.status === 0 ? null : `could not commit the merge: ${(commit.stderr || commit.stdout).slice(-300)}`;
 }
 
-/** Copy this repository's skills into `dir`, put the panel's import in place and check the core changes of the voice
- *  channel and of the assistant prompt. */
+/** The skills of this repository installed in `dir` (each has its folder under .claude/skills). */
+export function installedSkills(dir) {
+  return OUR_SKILLS.filter((skill) => fs.existsSync(path.join(dir, '.claude', 'skills', skill, 'SKILL.md')));
+}
+
+/**
+ * Copy the newer version of the skills `dir` has into it (only those: an install without the voice channel must not
+ * get its files), put the panel's import in place and check the core changes of the voice channel and of the
+ * assistant prompt. A skill this install never had is added with install-skills.mjs, not here.
+ */
 function refreshSkills(dir) {
-  for (const skill of OUR_SKILLS) {
+  const skills = installedSkills(dir);
+  for (const skill of skills) {
     const source = path.join(SKILLS_REPO, '.claude', 'skills', skill);
     fs.cpSync(path.join(source, 'payload'), dir, { recursive: true });
     const target = path.join(dir, '.claude', 'skills', skill);
     fs.rmSync(target, { recursive: true, force: true });
     fs.cpSync(source, target, { recursive: true });
   }
-  const barrel = run('node', ['scripts/panel-barrel.mjs'], { cwd: dir });
-  if (barrel.status !== 0) throw new Error(`the panel's import could not be placed: ${barrel.stderr || barrel.stdout}`);
-  const seams = run('node', ['scripts/voice-core-seams.mjs'], { cwd: dir });
-  if (seams.status !== 0) throw new Error(`the voice channel's core changes no longer fit this upstream:\n${seams.stderr || seams.stdout}`);
-  const prompt = run('node', ['scripts/assistant-prompt-seams.mjs'], { cwd: dir });
-  if (prompt.status !== 0) throw new Error(`the assistant prompt's changes no longer fit this upstream:\n${prompt.stderr || prompt.stdout}`);
+  const steps = [
+    ['add-manager-panel', 'scripts/panel-barrel.mjs', "the panel's import could not be placed"],
+    ['add-voice', 'scripts/voice-core-seams.mjs', "the voice channel's core changes no longer fit this upstream"],
+    ['add-assistant-prompt', 'scripts/assistant-prompt-seams.mjs', "the assistant prompt's changes no longer fit this upstream"],
+  ];
+  for (const [skill, script, problem] of steps) {
+    if (!skills.includes(skill)) continue;
+    const result = run('node', [script], { cwd: dir });
+    if (result.status !== 0) throw new Error(`${problem}:\n${result.stderr || result.stdout}`);
+  }
+  return skills;
 }
 
 // ---------------------------------------------------------------------------
@@ -307,15 +323,26 @@ async function validate(install, flags) {
 async function prepare(install, flags) {
   if (install.readPending()) fail('an update is already prepared: run `cutover` to finish it or `abandon` to drop it');
   preflight(install);
+  // The host checks its upgrade marker against HEAD at every start: one that does not match now means the code changed
+  // outside the sanctioned paths, and committing over it would hide that.
+  if (!markerMatches(install.dir)) {
+    fail(
+      "NanoClaw's upgrade marker does not match this checkout (the code changed outside the sanctioned paths, or a commit " +
+        'was made after it was written): sort that out first, see docs/upgrade-recovery.md. Nothing was changed.',
+    );
+  }
   const status = install.git('status', '--porcelain').stdout.trim();
   if (status) {
-    const files = status.split('\n').length;
-    say(`The install has ${files} local changes (the skills). The updater needs a clean tree, so they are committed as one baseline commit.`);
+    const lines = status.split('\n');
+    say(`The install has ${lines.length} local changes. The updater needs a clean tree, so they are committed as one baseline commit:`);
+    for (const line of lines.slice(0, 20)) say(`  ${line}`);
+    if (lines.length > 20) say(`  … and ${lines.length - 20} more (git status)`);
     if (!(await confirm('Commit them?', flags.yes))) fail('nothing was changed');
-    const add = install.git('add', '-A');
-    if (add.status !== 0) fail(`git add failed: ${add.stderr}`);
-    const commit = install.git('commit', '-q', '-m', 'local: skills installed (baseline before the update)');
-    if (commit.status !== 0) fail(`the baseline commit failed (a commit hook?):\n${commit.stderr || commit.stdout}`);
+    const committed = commitAll(install.dir, 'local: skills installed (baseline before the update)');
+    if (committed) fail(`the baseline commit failed (a commit hook?):\n${committed}`);
+    // The marker records the new HEAD, or the next restart of the host (and upstream's own rollback) would refuse to start.
+    const stamped = stampMarker(install.dir, 'skills-baseline');
+    if (stamped) fail(`the baseline commit was made but the upgrade marker could not be written: ${stamped}\nRun \`pnpm exec tsx scripts/upgrade-state.ts set\` in the install before restarting it.`);
   }
   const remote = remoteOf(install, flags.remote);
   const fetch = install.git('fetch', remote, '--prune');
@@ -360,7 +387,7 @@ async function prepare(install, flags) {
     refreshSkills(prepared.json.stageRoot);
   } catch (error) {
     install.controller(controllerDir, 'abandon', ['--id', prepared.json.id]);
-    fail(`${error.message}\nThe prepared update was dropped; the install was not touched.`);
+    fail(`${error.message}\nThe prepared update was dropped; the install keeps running as it was.`);
   }
   const stage = (...args) => run('git', args, { cwd: prepared.json.stageRoot });
   stage('add', '-A');
@@ -373,7 +400,7 @@ async function prepare(install, flags) {
   const validated = runValidation(install, controllerDir, prepared.json.id, prepared.json.stageRoot);
   if (!validated.ok) {
     install.writePending({ id: prepared.json.id, controllerDir, stageRoot: prepared.json.stageRoot, phase: 'validation-failed', remote, requirements: prepared.json.requirements ?? [], channel: prepared.json.channel, upstreamRef: prepared.json.upstreamRef });
-    fail(`${validated.message}\nNothing in the install changed. Run \`validate\` to try the tests again (a test can fail by chance under load), or fix it in ${prepared.json.stageRoot}, or \`abandon\`.`, 4);
+    fail(`${validated.message}\nThe install keeps running as it was. Run \`validate\` to try the tests again (a test can fail by chance under load), or fix it in ${prepared.json.stageRoot}, or \`abandon\`.`, 4);
   }
 
   const requirements = prepared.json.requirements ?? [];
@@ -473,7 +500,7 @@ async function abandon(install) {
     if (result.status !== 0) say(`the updater said: ${result.stderr.slice(-300)}`);
   }
   install.clearPending();
-  say('The prepared update was dropped. The install was not touched.');
+  say('The prepared update was dropped. The install keeps running as it was.');
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

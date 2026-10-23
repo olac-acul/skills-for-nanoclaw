@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -24,6 +25,7 @@ import {
   planRestore,
   restoreBundle,
   rollbackRestore,
+  ensureTxnDir,
 } from './restore.js';
 
 let tmp: string;
@@ -65,6 +67,22 @@ beforeEach(async () => {
 afterEach(() => {
   vi.restoreAllMocks();
   fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+describe('the transactions folder', () => {
+  it('is invisible to git, so an update baseline commit never takes the previous .env', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'txn-git-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: root });
+      const dir = ensureTxnDir(root);
+      fs.mkdirSync(path.join(dir, '20261024T000000Z-abc', 'previous-misc'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '20261024T000000Z-abc', 'previous-misc', 'dotenv'), 'TELEGRAM_BOT_TOKEN=x\n');
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' })).toBe('');
+      expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('planRestore', () => {
@@ -367,7 +385,8 @@ describe('finished transactions', () => {
     await commitRestore(target.host, first.txn);
     const second = await restoreBundle({ host: target.host, bundleFile, key, mode: 'full' });
     await rollbackRestore(target.host, second.txn);
-    expect(fs.readdirSync(path.join(target.project, TXN_DIR))).toEqual([second.txn]);
+    // the folder's own .gitignore stays; of the transactions, only the latest
+    expect(fs.readdirSync(path.join(target.project, TXN_DIR)).filter((name) => !name.startsWith('.'))).toEqual([second.txn]);
     await expect(commitRestore(target.host, second.txn)).rejects.toMatchObject({ code: 'nothing_to_roll_back' });
   });
 });

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 
-import { REGENERABLE_LOCKS, describePhase, gatewayUpgradeScript, lockOnlyConflict, onecliTarget, parseControllerJson, planRequirements, validPin } from './update-install.mjs';
+import { REGENERABLE_LOCKS, describePhase, installedSkills, gatewayUpgradeScript, lockOnlyConflict, onecliTarget, parseControllerJson, planRequirements, validPin } from './update-install.mjs';
 
 const ONECLI = {
   id: 'breaking-change-x',
@@ -66,4 +69,18 @@ test('a merge that conflicts only in lock files can be settled by rebuilding the
   assert.equal(lockOnlyConflict([]), false);
   assert.equal(lockOnlyConflict(undefined), false);
   for (const { command } of Object.values(REGENERABLE_LOCKS)) assert.ok(command.includes('--lockfile-only'));
+});
+
+test('refreshes only the skills the install has: no voice files on an install without the voice channel', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'installed-'));
+  try {
+    for (const skill of ['add-manager-backup', 'add-manager-panel']) {
+      fs.mkdirSync(path.join(dir, '.claude', 'skills', skill), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.claude', 'skills', skill, 'SKILL.md'), '---\n');
+    }
+    fs.mkdirSync(path.join(dir, '.claude', 'skills', 'add-voice')); // a folder without SKILL.md is not an install
+    assert.deepEqual(installedSkills(dir), ['add-manager-backup', 'add-manager-panel']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -124,15 +124,21 @@ node scripts/compose.mjs --upstream https://github.com/nanocoai/nanoclaw.git
 
 ### After installing: the upgrade check
 
-NanoClaw refuses to start when its files changed outside its own setup or update flow. Installing a
-skill counts as such a change, and you will see an *"upgrade tripwire"* message. Once the build and
-tests of the skills passed, record the new state and start again:
+At every start NanoClaw compares its upgrade record (`data/upgrade-state.json`) with the last commit of the
+install, and refuses to start with an *"upgrade tripwire"* message when they differ. Uncommitted changes do not
+count: what trips it is a **commit made after the record was written**, for example committing the skills by hand.
+
+`scripts/install-skills.mjs` (see *Only the skills changed* below) handles this itself: it commits the skills and
+then writes the record for that commit. If you applied the skills another way (Claude Code, `compose.mjs`) and then
+commit them, write the record afterwards, then restart:
 
 ```bash
+git add -A && git commit -m "local: skills installed"
 pnpm exec tsx scripts/upgrade-state.ts set
 ```
 
-Then rebuild if you changed code (`pnpm run build`) and restart the NanoClaw service.
+If the host already stops with that message, the same `set` clears it, once you know the code is what you meant
+to run (upstream's `docs/upgrade-recovery.md`).
 
 ## First run
 
@@ -827,12 +833,14 @@ node scripts/update-install.mjs prepare --install ~/nanoclaw      # changes noth
 node scripts/update-install.mjs cutover --install ~/nanoclaw      # the step with downtime; it asks first
 ```
 
-`prepare` commits the install's local changes (the skills) as one baseline commit, because upstream's updater needs
-a clean tree; prepares the update in a separate copy (by default the newest stable release; `--channel edge` follows
-upstream's `main`); settles a merge that conflicts only in lock files by rebuilding them; refreshes this repository's
-skills in the copy, puts the panel's import line in its place and checks that the voice channel's core changes still
-fit; then builds and runs the whole test suite there. Whatever fails, the install is untouched. If the merge conflicts
-in anything else, it stops and says where.
+`prepare` first checks that NanoClaw's upgrade record matches the install (it stops, changing nothing, if not); lists
+and commits the install's local changes as one baseline commit, because upstream's updater needs a clean tree, and
+writes the upgrade record for that commit; prepares the update in a separate copy (by default the newest stable
+release; `--channel edge` follows upstream's `main`); settles a merge that conflicts only in lock files by rebuilding
+them; refreshes in the copy the skills of this repository that the install has, puts the panel's import line in its
+place and checks that the voice channel's and the assistant prompt's core changes still fit; then builds and runs the
+whole test suite there. Whatever fails, the install keeps running as it was (with at most that baseline commit). If
+the merge conflicts in anything else, it stops and says where.
 
 `cutover` stops the service and the agents' containers, rebuilds the image if upstream's change needs it, and starts
 again; plan for several minutes without the assistant. If the release asks for the OneCLI gateway to be moved to
@@ -854,9 +862,12 @@ node scripts/install-skills.mjs --install ~/nanoclaw
 ```
 
 Skills already installed are refreshed (their files and dependencies replaced) and then checked, built and tested;
-the voice section of the agents' instructions is rewritten where it is in use; the new state is recorded and
-NanoClaw restarts, a few seconds without the assistant. If a test fails it stops before the restart, and the install
-keeps running the previous build: `git status` in the install shows what changed and `git checkout .` undoes it.
+the voice section of the agents' instructions is rewritten where it is in use; the result is committed, the upgrade
+record is written for that commit, and NanoClaw restarts, a few seconds without the assistant. If the install had
+other uncommitted changes, nothing is committed and the script says what to do (commit, then
+`pnpm exec tsx scripts/upgrade-state.ts set`). If a test fails it stops before the commit and the restart, and the
+install keeps running the previous build: `git status` in the install shows what changed, and
+`git checkout . && git clean -fd -- src container scripts .claude` undoes it, new files included.
 
 ### Rebuilding agent images
 
