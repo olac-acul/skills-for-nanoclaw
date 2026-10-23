@@ -12,9 +12,11 @@ import {
   canonicalPairingCode,
   cleanDeviceName,
   createVoiceAdapter,
+  forThisApp,
   hashPairingCode,
   idleResetMinutes,
   isPrivateAddress,
+  notDeclared,
   readOutbound,
   stripMarkers,
   type VoiceAdapter,
@@ -111,6 +113,27 @@ const until = async (cond: () => boolean, ms = 1000) => {
 
 afterEach(async () => {
   for (const c of open.splice(0)) await c.close();
+});
+
+describe('product lookups and older apps', () => {
+  const food = { name: 'product', args: { barcode: '8001234567890', kind: 'food' } };
+  const beauty = { name: 'product', args: { barcode: '3600523307500', kind: 'beauty' } };
+
+  it('sends product as it is to an app that knows it', () => {
+    expect(forThisApp(food, new Set(['product', 'food_product']))).toEqual(food);
+  });
+
+  it('sends a food code as food_product to an app that only knows that (NanoVoice 0.1.0)', () => {
+    expect(forThisApp(food, new Set(['food_product']))).toEqual({
+      name: 'food_product',
+      args: { barcode: '8001234567890' },
+    });
+    // other kinds that app cannot look up: refused as not supported, not sent to the wrong database
+    expect(forThisApp(beauty, new Set(['food_product']))).toEqual(beauty);
+    // photo services switched off: neither is declared, and the agent is told where to switch them on
+    expect(forThisApp(food, new Set())).toEqual(food);
+    expect(notDeclared('product')).toContain('Servizi esterni per le foto');
+  });
 });
 
 describe('outbound content', () => {

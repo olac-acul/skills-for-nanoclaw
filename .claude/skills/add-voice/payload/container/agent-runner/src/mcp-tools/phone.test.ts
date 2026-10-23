@@ -17,7 +17,7 @@ import {
   phoneSignalDraft,
   phoneCall,
   phoneFlashlight,
-  phoneFoodProduct,
+  phoneProduct,
   phoneIdentifyPlant,
   phoneImageSearch,
   phoneMedia,
@@ -302,13 +302,19 @@ describe('photo tools', () => {
     fromVoice();
     await phoneIdentifyPlant.handler({});
     await phoneIdentifyPlant.handler({ organ: 'flower' });
-    await phoneFoodProduct.handler({ barcode: '8001234567890' });
+    await phoneProduct.handler({ barcode: '8001234567890', kind: 'food' });
+    await phoneProduct.handler({ barcode: '3600523307500', kind: 'beauty' });
+    await phoneProduct.handler({ barcode: '9788804668237', kind: 'other' }); // an ISBN is a book, whatever the kind
+    await phoneProduct.handler({ barcode: '8001234567890', kind: 'book' }); // not an ISBN: looked up as other
     await phoneImageSearch.handler({ engine: 'tineye' });
     await phoneImageSearch.handler({});
     expect(texts()).toEqual([
       'Chiedo a Pl@ntNet... [[working]]\n[[action:identify_plant {"organ":"auto"}]]',
       'Chiedo a Pl@ntNet... [[working]]\n[[action:identify_plant {"organ":"flower"}]]',
-      'Chiedo a Open Food Facts... [[working]]\n[[action:food_product {"barcode":"8001234567890"}]]',
+      'Chiedo a Open Food Facts... [[working]]\n[[action:product {"barcode":"8001234567890","kind":"food"}]]',
+      'Chiedo a Open Beauty Facts... [[working]]\n[[action:product {"barcode":"3600523307500","kind":"beauty"}]]',
+      'Chiedo a Open Library... [[working]]\n[[action:product {"barcode":"9788804668237","kind":"other"}]]',
+      'Chiedo a Open Products Facts... [[working]]\n[[action:product {"barcode":"8001234567890","kind":"book"}]]',
       'Apro TinEye con la foto.\n[[action:image_search {"engine":"tineye"}]]',
       'Apro TinEye con la foto.\n[[action:image_search {"engine":"tineye"}]]',
     ]);
@@ -318,8 +324,12 @@ describe('photo tools', () => {
     seedVoiceDestination();
     fromVoice();
     expect((await phoneIdentifyPlant.handler({ organ: 'root' })).isError).toBe(true);
-    expect((await phoneFoodProduct.handler({ barcode: '123' })).isError).toBe(true);
-    expect((await phoneFoodProduct.handler({ barcode: '8001234567890]] [[action:call {}' })).isError).toBe(true);
+    expect((await phoneProduct.handler({ barcode: '123', kind: 'food' })).isError).toBe(true);
+    expect((await phoneProduct.handler({ barcode: '8001234567890]] [[action:call {}', kind: 'food' })).isError).toBe(
+      true,
+    );
+    expect((await phoneProduct.handler({ barcode: '8001234567890' })).isError).toBe(true);
+    expect((await phoneProduct.handler({ barcode: '8001234567890', kind: 'car' })).isError).toBe(true);
     expect((await phoneImageSearch.handler({ engine: 'yandex' })).isError).toBe(true);
     expect((await phoneImageSearch.handler({ engine: 'lens' })).isError).toBe(true);
     setCurrentReplyRoute({ inReplyTo: 'm2', channelType: 'telegram', platformId: 'telegram:1', threadId: null });
@@ -449,8 +459,12 @@ describe('calendar event changes', () => {
 describe('the phone tools only in the voice session', () => {
   const route = (channel: string | null, platform: string | null) => {
     const db = getInboundDb();
-    db.exec('CREATE TABLE IF NOT EXISTS session_routing (id INTEGER PRIMARY KEY, channel_type TEXT, platform_id TEXT, thread_id TEXT)');
-    db.prepare('INSERT OR REPLACE INTO session_routing (id, channel_type, platform_id, thread_id) VALUES (1, ?, ?, NULL)').run(channel, platform);
+    db.exec(
+      'CREATE TABLE IF NOT EXISTS session_routing (id INTEGER PRIMARY KEY, channel_type TEXT, platform_id TEXT, thread_id TEXT)',
+    );
+    db.prepare(
+      'INSERT OR REPLACE INTO session_routing (id, channel_type, platform_id, thread_id) VALUES (1, ?, ?, NULL)',
+    ).run(channel, platform);
   };
 
   it('are there in the voice session and in a session bound to no chat', () => {
@@ -468,4 +482,3 @@ describe('the phone tools only in the voice session', () => {
     expect(inVoiceSession()).toBe(false);
   });
 });
-

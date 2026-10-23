@@ -383,7 +383,7 @@ for (const [path, names] of [
     ['sms_draft', 'signal_draft', 'calendar_draft', 'note'],
   ],
   ["Impostazioni → Permessi → Cosa può fare l'agente sul telefono → Stato del telefono", ['battery']],
-  ['Impostazioni → Foto → Servizi esterni per le foto', ['identify_plant', 'food_product', 'image_search']],
+  ['Impostazioni → Foto → Servizi esterni per le foto', ['identify_plant', 'product', 'food_product', 'image_search']],
 ] as const) {
   for (const name of names) SWITCH_OF[name] = path;
 }
@@ -397,6 +397,18 @@ export function notDeclared(name: string): string {
   return path
     ? `${name} is switched off in the NanoVoice app. Tell the person in one sentence that they can switch it on in "${path}"; do not say the phone cannot do it.`
     : `the phone does not support ${name}`;
+}
+
+type VoiceAction = NonNullable<VoiceOutbound['action']>;
+
+/**
+ * The action as this app knows it. An app older than the product lookup (NanoVoice 0.1.0) has only `food_product`:
+ * a food code still goes there; the other kinds it cannot look up.
+ */
+export function forThisApp(action: VoiceAction, capabilities: Set<string>): VoiceAction {
+  if (action.name !== 'product' || capabilities.has('product') || !capabilities.has('food_product')) return action;
+  if (action.args.kind !== 'food') return action;
+  return { name: 'food_product', args: { barcode: action.args.barcode } };
 }
 
 /** An identical text this soon after the previous one is a repeat of the runner, not something new to say. */
@@ -1107,8 +1119,9 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       }
       if (action) {
         const actionId = `a${++actionCounter}`;
-        if (!capabilities!.has(action.name)) {
-          feedAgent(actionResultText(actionId, false, notDeclared(action.name)), `voice-result-${actionId}`, live.id);
+        const sent = forThisApp(action, capabilities!);
+        if (!capabilities!.has(sent.name)) {
+          feedAgent(actionResultText(actionId, false, notDeclared(sent.name)), `voice-result-${actionId}`, live.id);
         } else {
           remember(actionExchange, actionId, live.id);
           live.openActions++;
@@ -1116,8 +1129,8 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
             type: 'action',
             reply_to: live.id,
             action_id: actionId,
-            name: action.name,
-            args: action.args,
+            name: sent.name,
+            args: sent.args,
           });
         }
       }
