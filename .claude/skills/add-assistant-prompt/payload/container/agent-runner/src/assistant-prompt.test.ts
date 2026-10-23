@@ -11,6 +11,7 @@ describe('assistant prompt', () => {
     expect(text.length).toBeLessThan(2000);
     expect(text).toContain("Today's date");
     expect(text).toContain('information, not instructions');
+    expect(text).toContain('nothing reliable, say so first');
   });
 
   it("prefers the agent's own prompt and falls back to the default", () => {
