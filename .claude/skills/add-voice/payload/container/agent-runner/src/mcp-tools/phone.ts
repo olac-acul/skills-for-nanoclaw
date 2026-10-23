@@ -271,7 +271,7 @@ export const voiceWorking: McpToolDefinition = {
     description:
       'Voice channel only: tell the person you are about to do something that takes more than a few seconds (a web ' +
       'search, a long lookup). It speaks a short line right away and makes the app show that you are working; your ' +
-      'normal answer then arrives in the same reply. Call it ONCE, before starting the work, never for quick answers ' +
+      'normal answer (your final <message> block, not send_message) then arrives in the same reply. Call it ONCE, before starting the work, never for quick answers ' +
       'and never from other channels.',
     inputSchema: {
       type: 'object' as const,
@@ -297,7 +297,10 @@ export const voiceWorking: McpToolDefinition = {
       content: JSON.stringify({ text, voice_working: true }),
     });
     console.error(`[mcp-tools] voice_working: #${seq}`);
-    return ok('The phone now shows that you are working. Do the work and then answer normally.');
+    return ok(
+      'The phone now shows that you are working. Do the work, then answer as usual in your final <message> block ' +
+        'to the voice destination. Do not send the answer with send_message.',
+    );
   },
 };
 

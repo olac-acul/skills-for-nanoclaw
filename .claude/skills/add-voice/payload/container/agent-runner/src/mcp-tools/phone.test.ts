@@ -155,8 +155,11 @@ describe('phone_open_app and phone_call MCP tools', () => {
 describe('voice_working MCP tool', () => {
   it('queues the line with the working marker, default text included', async () => {
     seedVoiceDestination();
-    await voiceWorking.handler({});
+    const result = await voiceWorking.handler({});
     await voiceWorking.handler({ text: 'Controllo' });
+    // The answer must come in the final <message> block: one sent with send_message leaves the turn ending with
+    // unwrapped text, which the runner sends back, and the model answers it with a second "Fatto" message.
+    expect((result.content[0] as { text: string }).text).toContain('Do not send the answer with send_message');
     const texts = getUndeliveredMessages().map((m) => asMarkers(m.content));
     expect(texts).toEqual(['Cerco sul Web... [[working]]', 'Controllo [[working]]']);
   });
