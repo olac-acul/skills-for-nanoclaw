@@ -16,6 +16,7 @@ import {
   hashPairingCode,
   idleResetMinutes,
   isPrivateAddress,
+  NO_CHOICES_TEXT,
   notDeclared,
   readOutbound,
   stripMarkers,
@@ -27,6 +28,8 @@ const TOKEN = 'secret-token';
 interface Harness {
   adapter: VoiceAdapter;
   inbound: Array<{ platformId: string; text: string; id: string; attachments?: unknown }>;
+  /** Answers given to NanoClaw's questions (onAction). */
+  answers: Array<{ questionId: string; value: string; userId: string }>;
 }
 
 type Msg = { type: string; [key: string]: unknown };
@@ -44,6 +47,7 @@ async function start(extra: Partial<Parameters<typeof createVoiceAdapter>[0]> = 
     ...extra,
   });
   const inbound: Harness['inbound'] = [];
+  const answers: Harness['answers'] = [];
   const setup: ChannelSetup = {
     onInbound: (platformId: string, _t: string | null, m: InboundMessage) => {
       const content = m.content as { text: string; attachments?: unknown };
@@ -56,11 +60,13 @@ async function start(extra: Partial<Parameters<typeof createVoiceAdapter>[0]> = 
     },
     onInboundEvent: () => {},
     onMetadata: () => {},
-    onAction: () => {},
+    onAction: (questionId, value, userId) => {
+      answers.push({ questionId, value, userId });
+    },
   };
   await adapter.setup(setup);
   open.push({ close: () => adapter.teardown() });
-  return { adapter, inbound };
+  return { adapter, inbound, answers };
 }
 
 async function connect(h: Harness, token: string | null = TOKEN): Promise<{ ws: WebSocket; received: Msg[] }> {
@@ -554,6 +560,98 @@ describe('voice adapter', () => {
     await until(() => received.some((m) => m.type === 'done'));
     expect(received.find((m) => m.type === 'delta')).toMatchObject({ reply_to: 'm1', text: 'Steve Jobs fondò Apple.' });
     expect(received.some((m) => m.type === 'notify')).toBe(false);
+  });
+
+  const askQuestion = {
+    kind: 'chat' as const,
+    content: {
+      type: 'ask_question',
+      questionId: 'q-1',
+      title: 'Spiagge',
+      question: 'Quale preferisci?',
+      options: [
+        { label: 'Otranto', value: 'otranto' },
+        { label: 'Gallipoli', value: 'gallipoli' },
+      ],
+    },
+  };
+
+  it("shows the agent's question as a choice and answers it with the option chosen", async () => {
+    const h = await start();
+    const { ws, received } = await connect(h);
+    ws.send(hello(['choose']));
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'dove vado al mare?' }));
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver('voice:default', null, { ...askQuestion, inReplyTo: h.inbound[0].id });
+    await until(() => received.some((m) => m.type === 'action'));
+    const action = received.find((m) => m.type === 'action')!;
+    expect(action).toMatchObject({
+      reply_to: 'm1',
+      name: 'choose',
+      args: { question: 'Quale preferisci?', options: ['Otranto', 'Gallipoli'] },
+    });
+    expect(received.some((m) => m.type === 'delta')).toBe(false); // the card, not the text
+    ws.send(JSON.stringify({ type: 'action_result', action_id: action.action_id, ok: true, detail: 'Gallipoli' }));
+    await until(() => h.answers.length === 1);
+    expect(h.answers[0]).toEqual({ questionId: 'q-1', value: 'gallipoli', userId: 'voice:default' });
+    expect(h.inbound).toHaveLength(1); // the result is the answer, not a new message for the agent
+    // the agent's reply after the choice still goes into the same request
+    await h.adapter.deliver('voice:default', null, {
+      kind: 'chat',
+      content: { text: 'Allora Gallipoli.' },
+      inReplyTo: h.inbound[0].id,
+    });
+    await until(() => received.some((m) => m.type === 'delta'));
+    expect(received.find((m) => m.type === 'delta')).toMatchObject({ reply_to: 'm1', text: 'Allora Gallipoli.' });
+  });
+
+  it('answers the question with no choice when the person chose none, or the app went away', async () => {
+    const h = await start();
+    const { ws, received } = await connect(h);
+    ws.send(hello(['choose']));
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'dove vado?' }));
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver('voice:default', null, { ...askQuestion, inReplyTo: h.inbound[0].id });
+    await until(() => received.some((m) => m.type === 'action'));
+    const first = received.find((m) => m.type === 'action')!;
+    ws.send(
+      JSON.stringify({
+        type: 'action_result',
+        action_id: first.action_id,
+        ok: false,
+        detail: 'la persona non ha scelto nessuna opzione',
+      }),
+    );
+    await until(() => h.answers.length === 1);
+    expect(h.answers[0].value).toBe('nessuna scelta: la persona non ha scelto nessuna opzione');
+
+    const second = { ...askQuestion, content: { ...askQuestion.content, questionId: 'q-2' } };
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm2', text: 'e in montagna?' }));
+    await until(() => h.inbound.length === 2);
+    await h.adapter.deliver('voice:default', null, { ...second, inReplyTo: h.inbound[1].id });
+    await until(() => received.filter((m) => m.type === 'action').length === 2);
+    ws.close();
+    await until(() => h.answers.length === 2);
+    expect(h.answers[1]).toMatchObject({ questionId: 'q-2', value: expect.stringContaining('scollegata') });
+  });
+
+  it('answers at once when the app cannot show choices, or no request is open', async () => {
+    const h = await start();
+    const { ws, received } = await connect(h);
+    ws.send(hello(['set_timer'])); // an app older than `choose`
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'dove vado?' }));
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver('voice:default', null, { ...askQuestion, inReplyTo: h.inbound[0].id });
+    await until(() => h.answers.length === 1);
+    expect(h.answers[0]).toMatchObject({ questionId: 'q-1', value: NO_CHOICES_TEXT });
+    // a question for no request at all (a scheduled task): the same, nothing shown
+    await h.adapter.deliver('voice:default', null, {
+      ...askQuestion,
+      content: { ...askQuestion.content, questionId: 'q-3' },
+    });
+    await until(() => h.answers.length === 2);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(received.some((m) => m.type === 'action' || m.type === 'notify')).toBe(false);
   });
 
   it('reports a failed reset', async () => {

@@ -10,7 +10,7 @@ import { getAllDestinations } from '../destinations.js';
 import { writeMessageOut } from '../db/messages-out.js';
 import { getCurrentInReplyTo, getCurrentReplyRoute } from '../db/session-state.js';
 import { getSessionRouting } from '../db/session-routing.js';
-import { askUserQuestion, sendCard } from './interactive.js';
+import { sendCard } from './interactive.js';
 import { registerTools } from './server.js';
 import type { McpToolDefinition } from './types.js';
 
@@ -734,11 +734,9 @@ export function onVoiceChannel(): boolean {
 }
 
 /**
- * The voice app has no buttons: a card or a question with options would reach it as text, a second version of the
- * answer the agent then writes again in its final block. In the voice app's session NanoClaw's two button tools are
- * not offered (they stay everywhere else).
+ * The voice app has no cards: one would reach it as text, a second version of the answer the agent then writes again
+ * in its final block. In the voice app's session NanoClaw's `send_card` is not offered (it stays everywhere else).
+ * `ask_user_question` is: the app shows it as a choice, one button per option (the `choose` action).
  */
-for (const tool of [askUserQuestion, sendCard]) {
-  const before = tool.available;
-  tool.available = () => !onVoiceChannel() && (before?.() ?? true);
-}
+const cardAvailable = sendCard.available;
+sendCard.available = () => !onVoiceChannel() && (cardAvailable?.() ?? true);

@@ -493,18 +493,18 @@ describe('the phone tools only in the voice session', () => {
     expect(inVoiceSession()).toBe(false);
   });
 
-  it("hide NanoClaw's card and question tools in the voice app's session only", () => {
+  it("hide NanoClaw's card tool in the voice app's session only, and keep its question tool", () => {
     // a card reached the app as text, and the agent wrote the answer again in its final block
     route('voice', 'voice:default');
-    expect(askUserQuestion.available?.()).toBe(false);
     expect(sendCard.available?.()).toBe(false);
+    expect(askUserQuestion.available?.() ?? true).toBe(true); // the app shows it as a choice
     for (const [channel, platform] of [
       ['telegram', 'telegram:1'],
       ['cli', 'local'],
       [null, null],
     ]) {
       route(channel, platform);
-      expect(askUserQuestion.available?.()).toBe(true);
+      expect(askUserQuestion.available?.() ?? true).toBe(true);
       expect(sendCard.available?.()).toBe(true);
     }
   });

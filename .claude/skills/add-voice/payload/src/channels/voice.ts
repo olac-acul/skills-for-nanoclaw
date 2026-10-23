@@ -170,6 +170,14 @@ export interface VoiceOutbound {
   working: boolean;
   /** Written only by the phone tools, never parsed out of text. */
   action: { name: string; args: Record<string, unknown> } | null;
+  /** NanoClaw's ask_user_question: the app shows it with one button per option (see `choose`). */
+  question?: VoiceQuestion;
+}
+
+export interface VoiceQuestion {
+  id: string;
+  question: string;
+  options: Array<{ label: string; value: string }>;
 }
 
 /** Marker-looking text from the agent (a quoted email, a web page) is shown as nothing: never run. */
@@ -190,15 +198,27 @@ export function readOutbound(content: unknown): VoiceOutbound | null {
   // Edits and reactions of earlier messages mean nothing on a voice line.
   if (typeof c.operation === 'string') return null;
   if (c.type === 'ask_question') {
-    // Read the question out: the voice line has no buttons (the agent's instructions say not to use it here).
+    // The app shows it as a choice; the text is what a notification would say.
     const options = Array.isArray(c.options)
       ? c.options
-          .map((o) => (typeof o === 'string' ? o : (o as { label?: unknown })?.label))
-          .filter((o): o is string => typeof o === 'string')
+          .map((o) => {
+            if (typeof o === 'string') return { label: o, value: o };
+            const { label, value } = (o ?? {}) as { label?: unknown; value?: unknown };
+            return typeof label === 'string' ? { label, value: typeof value === 'string' ? value : label } : null;
+          })
+          .filter((o): o is { label: string; value: string } => o !== null)
       : [];
     const question = typeof c.question === 'string' ? c.question : '';
-    const text = options.length > 0 ? `${question} (${options.join(', ')})` : question;
-    return { text: stripMarkers(text), working: false, action: null };
+    const text = options.length > 0 ? `${question} (${options.map((o) => o.label).join(', ')})` : question;
+    const out: VoiceOutbound = { text: stripMarkers(text), working: false, action: null };
+    if (typeof c.questionId === 'string' && c.questionId) {
+      out.question = {
+        id: c.questionId,
+        question: stripMarkers(question),
+        options: options.map((o) => ({ label: stripMarkers(o.label), value: o.value })),
+      };
+    }
+    return out;
   }
   if (c.type === 'card') {
     return {
@@ -411,6 +431,10 @@ export function forThisApp(action: VoiceAction, capabilities: Set<string>): Voic
   return { name: 'food_product', args: { barcode: action.args.barcode } };
 }
 
+/** What the agent's question gets when the app cannot show it: it then asks in its reply instead. */
+export const NO_CHOICES_TEXT =
+  'nessuna scelta: questa app non mostra le domande con opzioni; fai la domanda nel testo della risposta e aspetta il messaggio della persona';
+
 /** An identical text this soon after the previous one is a repeat of the runner, not something new to say. */
 const REPEAT_WINDOW_MS = 30_000;
 
@@ -467,6 +491,8 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
     inboundExchange.get(inReplyTo) ?? inboundExchange.get(inReplyTo.slice(0, inReplyTo.lastIndexOf(':')));
   /** Action id -> the exchange it was sent for. */
   const actionExchange = new Map<string, string>();
+  /** Action id of a `choose` -> the ask_user_question it shows, still waiting for its answer. */
+  const questionActions = new Map<string, VoiceQuestion>();
   const pendingNotify: string[] = [];
   let clearsPending = 0; // "Session cleared." replies still to swallow
   /**
@@ -592,6 +618,39 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
 
   function send(ws: WebSocket | null, payload: Record<string, unknown>): void {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
+  }
+
+  /**
+   * The answer to the agent's ask_user_question, as a button press on another channel would give it. Every question
+   * gets one (a choice, or why there is none), so the agent's turn never waits for its 5-minute timeout.
+   */
+  function answerQuestion(questionId: string, value: string): void {
+    try {
+      setupConfig?.onAction(questionId, value, chatId, { platformId: chatId });
+    } catch (err) {
+      log.error('Voice question answer failed', { err });
+    }
+  }
+
+  /**
+   * The agent's question, on the app as a `choose` card in the request it belongs to; the action result answers it.
+   * Without an open request, or with an app that has no `choose`, it is answered at once: the agent asks in its reply.
+   */
+  function askQuestion(question: VoiceQuestion, live: Exchange | null): void {
+    if (!live || !capabilities?.has('choose')) return answerQuestion(question.id, NO_CHOICES_TEXT);
+    const actionId = `a${++actionCounter}`;
+    remember(actionExchange, actionId, live.id);
+    remember(questionActions, actionId, question);
+    live.openActions++;
+    send(client, {
+      type: 'action',
+      reply_to: live.id,
+      action_id: actionId,
+      name: 'choose',
+      args: { question: question.question, options: question.options.map((o) => o.label) },
+    });
+    // The answer to the choice comes in this same reply.
+    scheduleDone(live, workingTimeoutMs);
   }
 
   /** Hands text to the agent as this chat's message; returns its host id, linked to [exchangeId] when given. */
@@ -748,6 +807,19 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       const exchangeId = actionExchange.get(actionId);
       actionExchange.delete(actionId);
       const ex = exchangeId ? exchanges.get(exchangeId) : undefined;
+      const asked = questionActions.get(actionId);
+      if (asked) {
+        // The choice answers the agent's question, even for a request the person interrupted (then as no choice).
+        questionActions.delete(actionId);
+        const detail = typeof msg.detail === 'string' ? msg.detail.slice(0, 300) : '';
+        const chosen = msg.ok === true ? asked.options.find((o) => o.label === detail) : undefined;
+        answerQuestion(asked.id, chosen ? chosen.value : `nessuna scelta: ${detail || 'la persona non ha scelto'}`);
+        if (ex && !ex.cancelled) {
+          ex.openActions = Math.max(0, ex.openActions - 1);
+          if (!ex.closed) scheduleDone(ex, followUpMs);
+        }
+        return;
+      }
       // Only a result of an action the agent asked for in a live request reaches it: not one the server never sent,
       // nor one of a request the person interrupted or replaced with a new conversation.
       if (!ex || ex.cancelled) return;
@@ -787,6 +859,10 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
     writeStatus(true);
     // The app fails its open requests when the socket drops: nothing more belongs to them.
     closeAll();
+    for (const [actionId, asked] of questionActions) {
+      questionActions.delete(actionId);
+      answerQuestion(asked.id, "nessuna scelta: l'app si è scollegata prima della risposta");
+    }
   }
 
   function readPairing(): { hash: string; expiresAt: number; attempts: number } | null {
@@ -1080,6 +1156,14 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       // stores it for the agent as "<id>:<agent group>" (messageIdForAgent), so that is what comes back here.
       const exchangeId = message.inReplyTo ? exchangeOf(message.inReplyTo) : undefined;
       const ex = exchangeId ? exchanges.get(exchangeId) : undefined;
+      // Before the check below: a question always gets an answer, or the agent's turn would wait for its timeout.
+      if (out.question) {
+        askQuestion(
+          out.question,
+          ex && !ex.cancelled && !ex.closed && client?.readyState === WebSocket.OPEN ? ex : null,
+        );
+        return id;
+      }
       // The person interrupted it, or started a new conversation: its words and actions go nowhere.
       if (ex?.cancelled) return id;
       const live = ex && !ex.closed && client && client.readyState === WebSocket.OPEN && capabilities ? ex : null;
