@@ -322,14 +322,15 @@ describe('photo tools', () => {
     ]);
   });
 
-  it('ask for the answer to the result in the final <message> block, not with send_message', async () => {
+  it('ask for the answer to the result only, in a <message> block, not with send_message', async () => {
     seedVoiceDestination();
     fromVoice();
-    // a send_message answer followed by the final block sends it twice (the channel drops only an identical copy)
+    // a send_message answer followed by the final block sends it twice (the channel drops only an identical copy);
+    // a reply written before the result is a second answer to the same request
     const result = await phoneProduct.handler({ barcode: '9791280845115', kind: 'book' });
-    expect((result.content[0] as { text: string }).text).toContain(
-      'final <message> block to the voice destination, not with send_message',
-    );
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain('Write nothing more in this turn');
+    expect(text).toContain('in a <message to="voice"> block (not with send_message)');
   });
 
   it('refuse bad arguments and other channels', async () => {
