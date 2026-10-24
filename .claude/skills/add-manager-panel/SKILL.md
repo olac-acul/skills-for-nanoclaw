@@ -159,14 +159,14 @@ trusted home network and wrong anywhere else. Pick one:
 
 Other settings: `PANEL_ENABLED=false` turns the panel off; `PANEL_PORT` (3200);
 `PANEL_BACKUP_DIR` (default `~/.local/share/nanoclaw-backups/<install>`);
-`PANEL_BACKUP_WAIT_SECONDS` (120): how long a backup waits for running agents.
+`PANEL_BACKUP_WAIT_SECONDS` (60): how long a backup waits for running agents.
 
 ## Security model
 
-- One administrator, password hashed with scrypt; five wrong passwords are free, then a growing lock (up to an hour) that survives restarts.
+- One administrator, password hashed with scrypt; five wrong passwords are free, then a growing lock (up to an hour). The counter and the lock are kept in `data/manager-panel/throttle.json`, so a restart does not clear them; `scripts/manager-panel.ts unlock` does.
 - Sessions live in memory and expire after 30 minutes idle or 8 hours total; a password change signs everything out. The cookie is `HttpOnly` and `SameSite=Strict` (`__Host-` and `Secure` when served over HTTPS).
 - Every change needs the CSRF token and an `Origin` equal to the panel's own. Model changes, creating, downloading and deleting backups also need the password typed again within the last five minutes.
-- The panel never returns a credential, a path, a log line or an internal id (agents get keyed hashes). API keys are not entered or shown here: store a key for an endpoint that needs one with `pnpm exec tsx setup/index.ts --step provider-auth opencode`.
+- The panel never returns a credential, a path, a log line or an internal id (agents get keyed hashes). API keys and tokens typed into the panel go straight to the credential gateway (OneCLI) through a helper script and are never shown again, not even to the panel.
 - State changes are audited (time, action, status, request id; never bodies) in `data/manager-panel/audit.jsonl`.
 - The panel runs in the NanoClaw process, with its privileges. Treat access to it like a shell on the machine.
 
@@ -174,4 +174,4 @@ Other settings: `PANEL_ENABLED=false` turns the panel off; `PANEL_PORT` (3200);
 
 - Applying a model change restarts every agent. Running turns are interrupted.
 - The panel's own state (password hash, audit log) lives in `data/manager-panel/` and is included in backups.
-- Updating NanoClaw is still done from the terminal with `/update-nanoclaw`.
+- Updating NanoClaw is still done from the terminal, with this repository's `scripts/update-install.mjs` (see the guide, *Updating NanoClaw*); it refreshes the panel along with NanoClaw.

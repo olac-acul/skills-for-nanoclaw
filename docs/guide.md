@@ -92,31 +92,32 @@ same command again: it goes on from there. `--redo STEP` runs one step again (`b
 - Node 22 or later and pnpm, as NanoClaw itself needs.
 
 What was actually tested: Debian 13 in an LXC container, Docker 29, Node 22.23, pnpm 10, Bun 1.4.0,
-NanoClaw `main` at the time of writing, OneCLI 1.41.0, applying the skills with upstream's own skill
+NanoClaw `main` at the time of writing, OneCLI 1.41.0 (the nightly check uses Bun 1.3.13), applying the skills with upstream's own skill
 engine. Anything else is expected to work but was not tried.
 
 ### Applying the skills
 
-Get this repository, then copy the two skill folders into the install:
+On an install that already runs, apply them from a checkout of this repository, as the user that owns the
+install:
 
 ```bash
-cp -r skills-for-nanoclaw/.claude/skills/add-manager-backup  ~/nanoclaw/.claude/skills/
-cp -r skills-for-nanoclaw/.claude/skills/add-manager-panel   ~/nanoclaw/.claude/skills/
+git clone https://github.com/olac-acul/skills-for-nanoclaw.git
+node skills-for-nanoclaw/scripts/install-skills.mjs --install ~/nanoclaw
 ```
 
-Apply them in this order. In Claude Code, from the install folder:
+By default it applies all four skills, in order: `add-manager-backup`, `add-manager-panel`, `add-voice` and
+`add-assistant-prompt`; `--skills add-manager-backup,add-manager-panel` limits it (the panel needs the backup skill).
+It uses NanoClaw's own skill engine: each skill checks its prerequisites, copies its files, builds, typechecks and
+runs its tests. The panel skill also appends one line, `import './manager-panel/index.js';`, to
+`src/modules/index.ts`. Then it commits the result as one local commit, writes NanoClaw's upgrade record for that
+commit (see the next section) and restarts the service (`--no-restart` to skip). Running it again is safe, and it is
+also how a newer version of the skills reaches an install whose NanoClaw has not changed.
 
-```
-/add-manager-backup
-/add-manager-panel
-```
+In Claude Code you can apply a skill by hand instead: copy its folder into the install's `.claude/skills/` and run
+`/add-manager-backup`, then `/add-manager-panel` (and `/add-voice`, `/add-assistant-prompt`). Then commit and write
+the upgrade record yourself, as the next section says.
 
-Each skill checks its prerequisites, copies its files, builds, typechecks and runs its tests. The
-panel skill also appends one line, `import './manager-panel/index.js';`, to `src/modules/index.ts`.
-Both are safe to repeat.
-
-To apply them without an agent (this is how they are tested), the repository has a script that does
-it with upstream's own engine on a clean checkout:
+To try them on a throw-away clean checkout instead (this is how they are tested), with the same engine:
 
 ```bash
 node scripts/compose.mjs --upstream https://github.com/nanocoai/nanoclaw.git

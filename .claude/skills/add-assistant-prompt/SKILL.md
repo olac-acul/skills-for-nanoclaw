@@ -56,7 +56,7 @@ Ask the agent something that needs a tool (for example the date in three days, o
 
 ## Updating NanoClaw
 
-After `/update-nanoclaw` run `node scripts/assistant-prompt-seams.mjs`: a no-op when the edits are in place. If upstream rewrote the code they attach to, it prints which edit no longer fits and changes nothing; the agents then keep OpenCode's own prompt and tools, which work, only longer.
+After an update with `scripts/update-install.mjs` nothing is left to do: its `prepare` step refreshes this skill and checks these edits before anything changes. After an update with upstream's `/update-nanoclaw` alone run `node scripts/assistant-prompt-seams.mjs`: a no-op when the edits are in place. If upstream rewrote the code they attach to, it prints which edit no longer fits and changes nothing; the agents then keep OpenCode's own prompt and tools, which work, only longer.
 
 ## Troubleshooting
 

@@ -11,9 +11,10 @@ What it adds:
 
 - **The channel** (`src/channels/voice.ts`): replies, actions, "working" and "done" tied to the app request they belong to; a single checked photo per message; wake-up push through UnifiedPush for a phone that is off; "new conversation" and "warm-up" frames.
 - **Weather** for the voice app's conversation (`weather_forecast`): Italian places from 3B Meteo's page, places abroad (and Italian ones when 3B Meteo does not answer or its page cannot be read) from Open-Meteo, a few lines with the source. One tool call instead of a web search and several reads of a page too large to fit. Other channels are not affected.
-- **Phone tools** for the agent (`phone_set_timer`, `phone_set_alarm`, stopping, skipping and snoozing them, `phone_open_app`, `phone_call`, music, volume, flashlight, navigation, links, message and Signal drafts, notes, battery, reads of the calendar, position and notifications, calendar changes with approval on the phone, photo tools, `voice_working`). They exist in every agent container and fail with a clear message unless the session has a voice channel.
+- **Phone tools** for the agent (`phone_set_timer`, `phone_set_alarm`, stopping, skipping and snoozing them, `phone_open_app`, `phone_call`, music, volume, flashlight, navigation, links, message and Signal drafts, notes, battery, reads of the calendar, position and notifications, calendar changes with approval on the phone, a generic approval question `phone_confirm`, photo tools `phone_identify_plant`, `phone_product` and `phone_image_search`, and `voice_working`). They are offered only in the voice app's conversation and in sessions bound to no chat (a scheduled task's); a Telegram or terminal conversation does not see them. A tool whose action the connected app does not declare fails with a clear message (an old app is told to update).
+- **Questions as choices**: NanoClaw's `ask_user_question` reaches the app as a `choose` action, one button per option, answered by button, voice or text. `send_card` is not offered in the voice app's conversation (the app has no cards); other channels keep both.
 - **Instructions** for the agent in the style of speech (short answers, numbers as digits, no private details read aloud), as one section between markers in the group's `instructions.prepend.md`, replaced as a whole on update.
-- **Two small changes to NanoClaw's core**, made by `scripts/voice-core-seams.mjs`: the id of the message an agent answers reaches the channel adapter, and the files the host staged for a turn (a photo) reach the provider. They are exact, anchored edits; if upstream changes that code the script changes nothing and says which edit no longer fits (see *Updating NanoClaw*).
+- **A few small changes to NanoClaw's core**, made by `scripts/voice-core-seams.mjs` (listed under *Install*): replies tied to the request they answer, host-staged photos reaching the provider, tools that say when they are available, and two more where the OpenCode provider is installed. They are exact, anchored edits; if upstream changes that code the script changes nothing and says which edit no longer fits (see *Updating NanoClaw*).
 - **`scripts/voice-setup.ts`** to enable the channel, wire it to an agent and show what to enter in the app.
 
 ## Prerequisites
@@ -99,7 +100,7 @@ pnpm exec vitest run src/channels/voice
 pnpm exec tsx scripts/voice-setup.ts enable --bind <address the phone reaches>
 ```
 
-It writes `VOICE_ENABLED`, `VOICE_AUTH_TOKEN` (a new random token, shown once; `pair` shows it again), `VOICE_BIND_HOST` and `VOICE_CHANNEL_PORT` (8767) in `.env`, and puts the voice instructions into the agent's group. Choose the address with care: it is the one the channel listens on.
+It writes `VOICE_ENABLED`, `VOICE_AUTH_TOKEN` (a new random token, shown once; `pair` shows it again), `VOICE_BIND_HOST` and `VOICE_CHANNEL_PORT` (8767) in `.env`, and puts the voice instructions into the agent's group. Choose the address with care: it is the one the channel listens on. Two optional keys: `VOICE_PLATFORM_ID` (default `default`) names the chat the app is, and `VOICE_ENABLED=false` (also `0`, `no`, `off`) turns the channel off without removing anything.
 
 - Use the address of a **VPN or private network** that the phone is on. The app accepts a plain `ws://` address only inside a private network with a VPN up, and requires `wss://` for anything else.
 - `127.0.0.1` (the default) listens on this machine only. `0.0.0.0` listens on every address: do not use it on a machine that faces the internet.
@@ -140,7 +141,7 @@ A photo sent from the app reaches the model only if the provider passes images o
 
 ## Slow requests, new conversation, push
 
-- `voice_working` writes a line ending in `[[working]]` to the voice channel. The adapter strips the marker, sends a `working` frame and keeps the reply open (up to 3 minutes) instead of closing it after 1.5 s of silence, so the answer arrives in the same reply.
+- `voice_working` writes its line to the voice channel flagged as "working". The adapter sends a `working` frame and keeps the reply open (up to 3 minutes) instead of closing it after 1.5 s of silence, so the answer, the agent's final message, arrives in the same reply. A `[[working]]` or `[[action:...]]` typed into a text is removed, never obeyed: only the tools can set them, and only for a request still open.
 - The app's "new conversation" sends `new_conversation`. The host keeps `/clear` for administrators and the voice sender is a plain member on purpose, so the adapter writes a fixed `/clear` row into this chat's own sessions and wakes them; other chats and the memory are untouched.
 - **A long pause starts a new conversation by itself.** A message that comes after 30 minutes without any message either way first resets the conversation the same way, so the agent answers on a short context (a conversation kept for days makes every request reread it, and a lost prompt cache costs tens of seconds). Memory and other chats are untouched; the app keeps showing the old messages, but the agent no longer has them in mind. Change the pause with `VOICE_IDLE_RESET_MINUTES` in `.env` (minutes; `0` turns it off) and restart NanoClaw. The time of the last message is kept in `data/voice-activity.json`.
 - When the app registers with a UnifiedPush distributor the adapter keeps the URL in `data/voice-push.json` (mode 600) and, for a message that arrives while the phone is offline, POSTs the body `wake` to it (at most every 15 s). The body never holds the message: the app wakes, reconnects and receives what was queued. The install needs outbound HTTPS to the distributor (for example ntfy.sh).
@@ -158,7 +159,7 @@ Everything in that memory becomes readable by the voice channel, so share only w
 
 ## Updating NanoClaw
 
-After `/update-nanoclaw` run `node scripts/voice-core-seams.mjs`: it is a no-op when the two core changes are still in place. If upstream rewrote the code they attach to, it prints which edit no longer fits and **changes nothing**; the voice channel then keeps working with the version already built, but a rebuild would fail the typecheck. In that case update this skill. The repository's nightly job applies the skill to upstream's `main` and reports it before you meet it.
+After an update with `scripts/update-install.mjs` nothing is left to do: its `prepare` step refreshes this skill and checks these edits before anything changes. After an update with upstream's `/update-nanoclaw` alone run `node scripts/voice-core-seams.mjs`: it is a no-op when the core changes are still in place. If upstream rewrote the code they attach to, it prints which edit no longer fits and **changes nothing**; the voice channel then keeps working with the version already built, but a rebuild would fail the typecheck. In that case update this skill. The repository's nightly job applies the skill to upstream's `main` and reports it before you meet it.
 
 ## Troubleshooting
 

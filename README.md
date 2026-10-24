@@ -4,7 +4,8 @@
 > Not affiliated with, endorsed by, or maintained by the upstream project.
 
 Skills that add to a clean upstream NanoClaw install without forking it: an installation is upstream plus the
-skills it has installed, and it updates with upstream's own `/update-nanoclaw`. The manager skills edit no
+skills it has installed. It updates through upstream's own transactional updater, driven by this repository's
+`scripts/update-install.mjs`, which also refreshes the installed skills. The manager skills edit no
 upstream source file beyond one import line. `add-voice` and `add-assistant-prompt` also make small changes to core
 or provider files, listed in their own documentation, applied as exact anchored edits that stop and change nothing if upstream moves that code.
 

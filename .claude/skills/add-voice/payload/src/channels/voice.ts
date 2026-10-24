@@ -2,7 +2,7 @@
  * Voice channel adapter (v2) — native WebSocket server for the NanoVoice Android app.
  *
  * Protocol v1 (JSON, `type` field): see docs in the NanoVoice repo (docs/PROTOCOL.md).
- *  app -> host: hello, message, cancel, action_result, push_endpoint, new_conversation
+ *  app -> host: hello, message, cancel, action_result, warm, push_endpoint, new_conversation
  *  host -> app: delta, action, working, done, error, notify, conversation_reset
  *
  * Single-operator, single-chat: one adapter instance = one messaging group with

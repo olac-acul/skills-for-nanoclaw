@@ -14,7 +14,8 @@ Reverses everything the skill added. The panel's state in
 
    ```bash
    rm -rf src/modules/manager-panel
-   rm -f scripts/manager-panel.ts scripts/tsconfig.manager-panel.json
+   rm -f scripts/manager-panel.ts scripts/tsconfig.manager-panel.json scripts/panel-barrel.mjs
+   rm -f scripts/manager-credentials.ts scripts/tsconfig.manager-credentials.json
    ```
 
    The files are:
@@ -64,7 +65,13 @@ src/modules/manager-panel/validate.ts
 src/modules/manager-panel/wiring.test.ts
 ```
 
-3. Remove the `PANEL_*` settings from `.env` if you set any, then rebuild and
+3. Remove the `qrcode` dependency the skill added, unless something else uses it:
+
+   ```bash
+   pnpm remove qrcode @types/qrcode
+   ```
+
+4. Remove the `PANEL_*` settings from `.env` if you set any, then rebuild and
    restart the service:
 
    ```bash

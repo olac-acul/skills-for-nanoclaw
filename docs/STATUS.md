@@ -4,19 +4,22 @@ What works, what has been tested, and what is known to be missing. Updated when 
 
 ## What it does
 
-Two skills for a clean upstream NanoClaw install, without a fork and without a Compose stack of their own:
+Four skills for a clean upstream NanoClaw install, without a fork and without a Compose stack of their own:
 
 - **`add-manager-panel`**: a web panel (overview, agents, the model provider for all agents, provider
   credentials, backups, a built-in guide).
 - **`add-manager-backup`**: encrypted, verified backups and restores, with rollback, a rehearsal mode,
   and weekly scheduled backups with a retention count.
+- **`add-voice`**: a voice channel for the NanoVoice Android app, with phone tools, choices, weather and photos.
+- **`add-assistant-prompt`**: a short assistant prompt for OpenCode agents in place of OpenCode's coding prompt.
 
 Model access itself comes from upstream's OpenCode provider (`/add-opencode`) and the credential gateway
 from upstream's OneCLI skill; the panel configures them, it does not replace them.
 
 ## Design decisions
 
-- A repository of skills only; no fork of upstream. Updates come from upstream's `/update-nanoclaw`.
+- A repository of skills only; no fork of upstream. Updates go through upstream's transactional updater, driven by
+  `scripts/update-install.mjs`, which also refreshes the installed skills and checks their core edits.
 - Upstream's credential gateway (OneCLI) at upstream's pin. Gateway credentials are **not** part of a backup
   and are entered again after a restore; a restore lists the credential names to re-enter.
 - One provider for all agents (an OpenAI-compatible endpoint, ChatGPT, or Claude); a different provider per
@@ -36,6 +39,7 @@ from upstream's OneCLI skill; the panel configures them, it does not replace the
   changes with rollback, ChatGPT subscription login and API key, Claude credential, removal of credentials,
   hot and scheduled backups, restore, rollback and rehearsal on a second machine, and the migration of an
   existing install from another format (done with a throwaway tool that is not part of this repository).
+- The voice channel and the assistant prompt are in daily use on one install with the NanoVoice app.
 - Details: [`real-install-test.md`](real-install-test.md) and [`spikes.md`](spikes.md).
 
 ## Known limits
