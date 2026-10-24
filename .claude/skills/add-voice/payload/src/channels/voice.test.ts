@@ -17,6 +17,7 @@ import {
   idleResetMinutes,
   isPrivateAddress,
   NO_CHOICES_TEXT,
+  choiceProblem,
   NO_OPEN_REQUEST_TEXT,
   notDeclared,
   readOutbound,
@@ -633,6 +634,33 @@ describe('voice adapter', () => {
     });
     await until(() => received.some((m) => m.type === 'delta'));
     expect(received.find((m) => m.type === 'delta')).toMatchObject({ reply_to: 'm1', text: 'Allora Gallipoli.' });
+  });
+
+  it('answers a question the app could not show at once, saying what to fix', async () => {
+    const h = await start();
+    const { ws, received } = await connect(h);
+    ws.send(hello(['choose']));
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'dove vado al mare?' }));
+    await until(() => h.inbound.length === 1);
+    const same = { label: 'Otranto', value: 'a' };
+    await h.adapter.deliver('voice:default', null, {
+      ...askQuestion,
+      content: { ...askQuestion.content, options: [same, { ...same, label: ' Otranto ' }] },
+      inReplyTo: h.inbound[0].id,
+    });
+    await until(() => h.answers.length === 1);
+    expect(h.answers[0].value).toMatch(/^nessuna scelta: servono da 2 a 5 opzioni diverse/);
+    expect(received.some((m) => m.type === 'action')).toBe(false);
+  });
+
+  it('knows the limits of a choice in the app', () => {
+    const q = (question: string, labels: string[]) => ({ id: 'q', question, options: labels.map((label) => ({ label, value: label })) });
+    expect(choiceProblem(q('Quale?', ['a', 'b']))).toBeNull();
+    expect(choiceProblem(q('x'.repeat(201), ['a', 'b']))).toMatch(/200 caratteri/);
+    expect(choiceProblem(q('Quale?', ['a']))).toMatch(/da 2 a 5/);
+    expect(choiceProblem(q('Quale?', ['a', 'b', 'c', 'd', 'e', 'f']))).toMatch(/da 2 a 5/);
+    expect(choiceProblem(q('Quale?', ['a', 'y'.repeat(61)]))).toMatch(/60 caratteri/);
+    expect(choiceProblem(q('', ['a', 'b']))).toMatch(/manca/);
   });
 
   it('answers the question with no choice when the person chose none, or the app went away', async () => {

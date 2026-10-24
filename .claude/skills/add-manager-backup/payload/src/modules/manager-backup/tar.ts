@@ -487,16 +487,12 @@ export interface TarEntry {
 export async function* readTar(source: AsyncIterable<Buffer>): AsyncGenerator<TarEntry> {
   const reader = new ByteReader(source);
   let pending: Map<string, string> | null = null;
-  let sawEnd = false;
 
   for (;;) {
     const header = await reader.read(BLOCK);
-    if (header.length === 0) break; // clean end without terminator blocks
+    if (header.length === 0) break; // a stream that stops exactly at an entry boundary is accepted too
     if (header.length < BLOCK) throw new TarError('truncated', 'archive ends inside a header');
-    if (header.every((byte) => byte === 0)) {
-      sawEnd = true;
-      break;
-    }
+    if (header.every((byte) => byte === 0)) break; // the end marker
     if (!checksumOk(header)) throw new TarError('bad_checksum', 'header checksum mismatch');
 
     const flag = String.fromCharCode(header[156]);
@@ -561,7 +557,6 @@ export async function* readTar(source: AsyncIterable<Buffer>): AsyncGenerator<Ta
   // Read the source to its end (nothing but zero padding may follow the end marker), so that an
   // authenticated source has verified every chunk, its last one included, before the caller finishes.
   await reader.drainZeros();
-  void sawEnd; // a stream that stops exactly at an entry boundary is accepted too
 }
 
 // ---------------------------------------------------------------------------

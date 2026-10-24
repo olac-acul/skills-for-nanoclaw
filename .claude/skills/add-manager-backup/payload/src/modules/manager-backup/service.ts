@@ -18,7 +18,7 @@ const ID_PATTERN = /^\d{8}T\d{6}Z-[0-9a-f]{6}$/;
 
 export class BackupError extends Error {
   constructor(
-    readonly code: 'agents_busy' | 'restore_running' | 'not_found' | 'invalid_id' | 'exists',
+    readonly code: 'agents_busy' | 'restore_running' | 'not_found' | 'invalid_id',
     message: string,
   ) {
     super(message);

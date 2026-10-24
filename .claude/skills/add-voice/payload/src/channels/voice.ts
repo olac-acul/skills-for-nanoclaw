@@ -214,8 +214,9 @@ export function readOutbound(content: unknown): VoiceOutbound | null {
     if (typeof c.questionId === 'string' && c.questionId) {
       out.question = {
         id: c.questionId,
-        question: stripMarkers(question),
-        options: options.map((o) => ({ label: stripMarkers(o.label), value: o.value })),
+        question: stripMarkers(question).trim(),
+        // Trimmed as the app trims them: the option it sends back must match one of these word for word.
+        options: options.map((o) => ({ label: stripMarkers(o.label).trim(), value: o.value })),
       };
     }
     return out;
@@ -471,6 +472,27 @@ export function forThisApp(action: VoiceAction, capabilities: Set<string>): Voic
 /** What the agent's question gets when the app cannot show it: it then asks in its reply instead. */
 export const NO_CHOICES_TEXT =
   'nessuna scelta: questa app non mostra le domande con opzioni; fai la domanda nel testo della risposta e aspetta il messaggio della persona';
+/** The app's limits for a choice (NanoVoice refuses anything else): checked here, so the agent learns what to fix. */
+const MAX_CHOICE_QUESTION = 200;
+const MAX_CHOICE_OPTIONS = 5;
+const MAX_CHOICE_OPTION = 60;
+
+/** Why the app could not show this question, in words for the agent; null when it fits. */
+export function choiceProblem(question: VoiceQuestion): string | null {
+  if (!question.question) return 'nessuna scelta: manca il testo della domanda; chiedi di nuovo con una domanda';
+  if (question.question.length > MAX_CHOICE_QUESTION)
+    return `nessuna scelta: la domanda supera ${MAX_CHOICE_QUESTION} caratteri; chiedi di nuovo con una domanda più corta`;
+  const labels = question.options.map((o) => o.label);
+  if (
+    labels.length < 2 ||
+    labels.length > MAX_CHOICE_OPTIONS ||
+    labels.some((label) => !label || label.length > MAX_CHOICE_OPTION) ||
+    new Set(labels).size !== labels.length
+  )
+    return `nessuna scelta: servono da 2 a ${MAX_CHOICE_OPTIONS} opzioni diverse, ognuna di al massimo ${MAX_CHOICE_OPTION} caratteri; correggile e chiedi di nuovo`;
+  return null;
+}
+
 /** What the agent's question gets when no request of the person is open (a scheduled task, a late question). */
 export const NO_OPEN_REQUEST_TEXT =
   'nessuna scelta: la persona non ha una richiesta aperta a cui mostrare la domanda; se serve, chiedilo nel testo di un messaggio';
@@ -686,6 +708,8 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
   function askQuestion(question: VoiceQuestion, live: Exchange | null): void {
     if (!live) return answerQuestion(question.id, NO_OPEN_REQUEST_TEXT);
     if (!capabilities?.has('choose')) return answerQuestion(question.id, NO_CHOICES_TEXT);
+    const problem = choiceProblem(question);
+    if (problem) return answerQuestion(question.id, problem);
     const actionId = `a${++actionCounter}`;
     remember(actionExchange, actionId, live.id);
     remember(questionActions, actionId, question);

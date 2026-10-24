@@ -106,8 +106,10 @@ cannot be opened. Provide it later through `MANAGER_BACKUP_KEY`, `--key-file`,
 or the hidden prompt; it is never accepted as a command-line argument.
 
 **While the host runs** the backup is still safe (each database file is copied
-consistently) but the files are not copied at the same instant, so it is
-recorded as `best-effort`. Stop the service first for a `cold` backup.
+consistently) but the files are not copied at the same instant. It is recorded
+as `quiescent` when no agent was in the middle of a turn from start to end, and
+as `best-effort` otherwise (a file that changed while it was read is then kept
+at its announced size). Stop the service first for a `cold` backup.
 
 **Scheduled backups.** A weekly backup that needs no person: a systemd user timer runs
 `scheduled --keep N`, which waits briefly for idle agents, backs up, and deletes scheduled backups beyond the

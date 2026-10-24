@@ -46,9 +46,9 @@ export const TOOL_VERSION = '0.1.0';
 export const TXN_DIR = '.manager-backup-txn';
 export const TOP_LEVEL = new Set(['manifest.json', 'db', 'data', 'groups', 'store', 'env', 'config']);
 export const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
-/** Entries listed by name in the manifest when a backup leaves some out; the rest are only counted. */
 /** Free space kept back when checking whether a file fits. */
 const SPACE_MARGIN = 16 * 1024 * 1024;
+/** Entries listed by name in the manifest when a backup leaves some out; the rest are only counted. */
 const MAX_SKIPPED_LISTED = 20;
 
 /** Files that identify this machine rather than the install; only backed up on request. */

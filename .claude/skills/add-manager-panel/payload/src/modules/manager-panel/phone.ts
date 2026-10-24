@@ -223,14 +223,19 @@ export function createPhonePort(options: PhoneOptions): PhonePort {
       const code = makePairingCode();
       const expiresAt = new Date(now() + PAIRING_TTL_MS).toISOString();
       fs.mkdirSync(dataDir, { recursive: true });
-      const temp = `${pairingFile}.tmp`;
+      // A name of its own, created exclusively: a file (or link) left at a fixed name would keep its own mode.
+      const temp = `${pairingFile}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
       // Only the code's hash is kept; the code itself lives in the QR code that is about to be shown.
-      fs.writeFileSync(
-        temp,
-        JSON.stringify({ hash: crypto.createHash('sha256').update(code).digest('hex'), expiresAt, attempts: 0 }),
-        { mode: 0o600 },
-      );
-      fs.renameSync(temp, pairingFile);
+      try {
+        fs.writeFileSync(
+          temp,
+          JSON.stringify({ hash: crypto.createHash('sha256').update(code).digest('hex'), expiresAt, attempts: 0 }),
+          { mode: 0o600, flag: 'wx' },
+        );
+        fs.renameSync(temp, pairingFile);
+      } finally {
+        fs.rmSync(temp, { force: true });
+      }
       return { matrix: (options.matrix ?? qrMatrix)(pairingLink(address.url, code)), expiresAt };
     },
 
