@@ -333,12 +333,14 @@ when it knows a context limit, and NanoClaw's installer sets none for a local mo
 until each answer takes a long time (on a test install: over 100k tokens, turns of a minute that timed out).
 
 The panel (when you change the model) and `install.sh` write a **working context**: the model's window, but at most
-65,536 tokens. A conversation starts at about 25k tokens of instructions and tools, so that leaves room for a normal
-exchange before the summary. The turn that makes the summary is slower; the ones after are fast again. To change it,
+131,072 tokens. A conversation starts at 25k to 40k tokens of instructions and tools; those are cached by the model
+server, so a larger context costs little per answer, while the turn that makes the summary is slow on a local model
+(20 to 90 seconds measured). Far beyond that, long contexts slow every answer down (a test install had turns of a
+minute that timed out past 100k tokens), hence the ceiling. To change it,
 set both in `.env` and restart the agents (`ncl groups restart --id <group>`), no restart of NanoClaw needed:
 
 ```
-OPENCODE_MODEL_CONTEXT_LIMIT=65536
+OPENCODE_MODEL_CONTEXT_LIMIT=131072
 OPENCODE_MODEL_OUTPUT_LIMIT=4096
 ```
 

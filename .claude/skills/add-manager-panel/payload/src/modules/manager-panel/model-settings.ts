@@ -229,11 +229,13 @@ export interface ApplyOutcome {
 
 /**
  * The context the agents work with, in tokens: the model's window, but never more than this. OpenCode summarizes a
- * conversation (auto-compaction) once it reaches the context limit minus the output limit; with the whole window of a
- * large model (262k, say) that would be never in practice, and long contexts make every answer slow (measured: over
- * 100k tokens, turns of a minute that time out). A conversation starts at about 25k tokens of instructions and tools.
+ * conversation (auto-compaction) once it reaches the context limit minus the output limit. The summary is slow on a
+ * local model (20 to 90 s measured, while the person waits), and a conversation starts at 25k to 40k tokens of
+ * instructions and tools, so a small limit means a summary every few exchanges; the instructions are cached, so a
+ * larger one costs little per answer. Too large is slow too: with the whole window of a large model (262k, say) a
+ * summary would be never in practice, and a test install had turns of a minute that timed out past 100k tokens.
  */
-export const WORKING_CONTEXT = 65_536;
+export const WORKING_CONTEXT = 131_072;
 
 /** The context limit written for a model whose window is [window] tokens. */
 export function workingContextFor(window: number): number {

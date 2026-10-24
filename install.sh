@@ -243,7 +243,7 @@ set_env() {
 
 # OpenCode summarizes a long conversation (auto-compaction) only when it knows a context limit, and NanoClaw's
 # installer sets none for a local model: conversations then grow until every answer is slow. The same working context
-# the panel writes: the model's window, at most 65536 tokens.
+# the panel writes: the model's window, at most 131072 tokens.
 working_context() {
   local env="$INSTALL/.env" base model window output
   grep -q '^OPENCODE_MODEL_CONTEXT_LIMIT=' "$env" 2>/dev/null && return 0
@@ -261,7 +261,7 @@ for m in json.load(sys.stdin).get("data") or []:
     note "The model's context window is unknown: set OPENCODE_MODEL_CONTEXT_LIMIT by hand (see the guide, Models)."
     return 0
   fi
-  (( window > 65536 )) && window=65536
+  (( window > 131072 )) && window=131072
   output=$(( window / 2 )); (( output > 4096 )) && output=4096; (( output < 256 )) && output=256
   set_env OPENCODE_MODEL_CONTEXT_LIMIT "$window"
   set_env OPENCODE_MODEL_OUTPUT_LIMIT "$output"
