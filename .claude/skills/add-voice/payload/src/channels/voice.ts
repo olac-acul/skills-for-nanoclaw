@@ -563,6 +563,17 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
    * the `/clear`: tied to that next request, the answer goes back into it instead of arriving as a notification.
    */
   let unboundClears: string[] = [];
+  /**
+   * The `/clear` written after a pause and the request it is tied to, until an answer comes through it. The request may
+   * be replaced before the runner answers (a sentence cut short and said again while the container starts): the batch's
+   * answer still comes through the `/clear`, and belongs to the request that replaced it.
+   */
+  let pauseClear: { clearId: string; exchangeId: string } | null = null;
+  const rebindPauseClear = (exchangeId: string): void => {
+    if (!pauseClear) return;
+    remember(inboundExchange, pauseClear.clearId, exchangeId);
+    pauseClear = { clearId: pauseClear.clearId, exchangeId };
+  };
   // The runner sometimes hands over the same final text twice (once for the request, once more after an action
   // result): the phone would show it twice. The last text sent and when, to drop an identical one right after.
   let lastText: { text: string; at: number; exchange: string | null } | null = null;
@@ -604,6 +615,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
   function resetAfterPause(silentMs: number, exchangeId: string): Promise<void> {
     const clearId = `voice-clear-${clock().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     remember(inboundExchange, clearId, exchangeId);
+    pauseClear = { clearId, exchangeId };
     return resetConversation(chatId, clearId)
       .then((count) => {
         clearsPending += count;
@@ -826,6 +838,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       if (old) closeExchange(old, false);
       remember(exchanges, id, { id, deltas: 0, timer: null, openActions: 0, closed: false, cancelled: false });
       for (const clearId of unboundClears.splice(0)) remember(inboundExchange, clearId, id);
+      if (pauseClear && exchanges.get(pauseClear.exchangeId)?.cancelled !== false) rebindPauseClear(id);
       const previous = lastActivityAt; // 0: nothing known yet (first message ever, or no state file), no reset
       const silentMs = clock() - previous;
       noteActivity();
@@ -848,6 +861,12 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       if (ex) {
         ex.cancelled = true;
         closeExchange(ex, false);
+        // The request that replaces it may already be here (a cancel can follow its message): one that came after it.
+        if (pauseClear?.exchangeId === ex.id) {
+          const all = [...exchanges.values()];
+          const next = all.slice(all.indexOf(ex) + 1).filter((e) => !e.closed && !e.cancelled).pop();
+          if (next) rebindPauseClear(next.id);
+        }
       }
       return;
     }
@@ -1240,6 +1259,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       // stores it for the agent as "<id>:<agent group>" (messageIdForAgent), so that is what comes back here.
       const exchangeId = message.inReplyTo ? exchangeOf(message.inReplyTo) : undefined;
       const ex = exchangeId ? exchanges.get(exchangeId) : undefined;
+      if (pauseClear && message.inReplyTo?.startsWith(pauseClear.clearId)) pauseClear = null; // answered
       // Before the check below: a question always gets an answer, or the agent's turn would wait for its timeout.
       if (out.question) {
         // NanoClaw's ask_user_question writes its row without in_reply_to: it belongs to the request being answered,

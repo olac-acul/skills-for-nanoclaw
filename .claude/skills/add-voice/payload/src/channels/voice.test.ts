@@ -502,6 +502,56 @@ describe('voice adapter', () => {
     expect(received.some((m) => m.type === 'conversation_reset')).toBe(false);
   });
 
+  it('answers the request that replaced the one a pause reset was tied to', async () => {
+    // Seen on the Pixel: a sentence cut short (m1) was said again (m2) while the container started; the batch's answer
+    // came through the /clear, which was tied to m1, so it was dropped and the app waited for m2's answer.
+    let t = 1_000_000;
+    const clearIds: string[] = [];
+    const h = await start({
+      idleResetMs: 30 * 60_000,
+      now: () => t,
+      resetConversation: async (_chatId, clearId) => {
+        if (clearId) clearIds.push(clearId);
+        return 1;
+      },
+    });
+    const { ws, received } = await connect(h);
+    ws.send(hello());
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'prima' }));
+    await until(() => h.inbound.length === 1);
+    t += 31 * 60_000;
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm2', text: 'di prova domani' }));
+    await until(() => h.inbound.length === 2);
+    ws.send(JSON.stringify({ type: 'cancel', reply_to: 'm2' }));
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm3', text: 'crea un evento di prova domani' }));
+    await until(() => h.inbound.length === 3);
+    expect(clearIds).toHaveLength(1);
+    await h.adapter.deliver('voice:default', null, {
+      kind: 'chat',
+      content: { text: 'Fatto.' },
+      inReplyTo: clearIds[0],
+    });
+    await until(() => received.some((m) => m.type === 'delta'));
+    expect(received.find((m) => m.type === 'delta')).toMatchObject({ reply_to: 'm3', text: 'Fatto.' });
+
+    // the same with the cancel arriving after the message that replaces the request
+    t += 31 * 60_000;
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm4', text: 'sposta' }));
+    await until(() => h.inbound.length === 4);
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm5', text: "sposta l'evento di prova" }));
+    ws.send(JSON.stringify({ type: 'cancel', reply_to: 'm4' }));
+    await until(() => h.inbound.length === 5);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(clearIds).toHaveLength(2);
+    await h.adapter.deliver('voice:default', null, {
+      kind: 'chat',
+      content: { text: 'Spostato.' },
+      inReplyTo: clearIds[1],
+    });
+    await until(() => received.some((m) => m.type === 'delta' && m.text === 'Spostato.'));
+    expect(received.find((m) => m.type === 'delta' && m.text === 'Spostato.')).toMatchObject({ reply_to: 'm5' });
+  });
+
   it('never resets by itself with the pause turned off, nor on the first message it knows of', async () => {
     let t = 1_000_000;
     let resets = 0;
