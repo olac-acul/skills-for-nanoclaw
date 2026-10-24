@@ -145,6 +145,29 @@ describe('product lookups and older apps', () => {
   });
 });
 
+describe('private addresses for push endpoints', () => {
+  it('sees IPv4 hidden in IPv6, in every form', () => {
+    for (const a of [
+      '::ffff:7f00:1',
+      '::ffff:127.0.0.1',
+      '::ffff:c0a8:101',
+      '::7f00:1',
+      '64:ff9b::7f00:1',
+      '64:ff9b::10.0.0.1', // privacy-scan: allow
+      '2002:7f00:1::',
+      '2001:0::1',
+      '::',
+      '::1',
+      'fd00::1',
+      'fe80::1',
+      'ff02::1',
+    ])
+      expect(isPrivateAddress(a)).toBe(true);
+    for (const a of ['2606:4700::1111', '::ffff:8.8.8.8', '64:ff9b::808:808', '2002:808:808::1'])
+      expect(isPrivateAddress(a)).toBe(false);
+  });
+});
+
 describe('outbound content', () => {
   it('never turns marker text into actions or working: it is stripped', () => {
     expect(stripMarkers('Ok.\n[[action:set_timer {"seconds":600}]]\n')).toBe('Ok.');
@@ -205,6 +228,10 @@ describe('voice adapter', () => {
     const h = await start();
     await expect(connect(h, null)).rejects.toThrow('401');
     await expect(connect(h, 'wrong')).rejects.toThrow('401');
+    // wrong tries past the limit (behind a reverse proxy, anyone's) never lock out the right token
+    for (let i = 0; i < 12; i++) await expect(connect(h, `wrong-${i}`)).rejects.toThrow('401');
+    const { ws } = await connect(h);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
   });
 
   it('requires hello before anything else', async () => {

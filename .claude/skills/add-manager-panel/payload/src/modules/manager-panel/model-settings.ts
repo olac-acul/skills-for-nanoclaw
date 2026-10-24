@@ -261,7 +261,9 @@ function targetEnv(
     OPENCODE_AUTH_MODE: null, // API-key (or keyless) mode; clears a leftover ChatGPT sign-in mode
     // Both limits or neither: a context limit alone makes OpenCode reject the model definition.
     OPENCODE_MODEL_CONTEXT_LIMIT: probe.contextLimit ? String(workingContextFor(probe.contextLimit)) : null,
-    OPENCODE_MODEL_OUTPUT_LIMIT: probe.contextLimit ? String(outputLimitFor(workingContextFor(probe.contextLimit))) : null,
+    OPENCODE_MODEL_OUTPUT_LIMIT: probe.contextLimit
+      ? String(outputLimitFor(workingContextFor(probe.contextLimit)))
+      : null,
   };
 }
 

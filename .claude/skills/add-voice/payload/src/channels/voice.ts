@@ -283,11 +283,45 @@ export function isPrivateAddress(host: string): boolean {
     );
   }
   if (v === 6) {
-    if (h === '::' || h === '::1') return true;
-    if (h.startsWith('::ffff:')) return isPrivateAddress(h.slice(7));
-    return /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || h.startsWith('ff');
+    // Read as bytes: an IPv4 address can hide in IPv6 in several forms ("::ffff:7f00:1" is 127.0.0.1).
+    const b = ipv6Bytes(h);
+    if (!b) return true; // not readable: not trusted to be public
+    const zero = (n: number) => b.slice(0, n).every((x) => x === 0);
+    const v4At = (i: number) => isPrivateAddress(b.slice(i, i + 4).join('.'));
+    if (zero(16) || (zero(15) && b[15] === 1)) return true; // :: and ::1
+    if (zero(10) && b[10] === 0xff && b[11] === 0xff) return v4At(12); // ::ffff:a.b.c.d (mapped)
+    if (zero(12)) return v4At(12); // ::a.b.c.d (compatible, deprecated)
+    if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b.slice(4, 12).every((x) => x === 0))
+      return v4At(12); // NAT64
+    if (b[0] === 0x20 && b[1] === 0x02) return v4At(2); // 6to4
+    if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) return true; // Teredo: tunnels anywhere
+    return (b[0] & 0xfe) === 0xfc || (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) || b[0] === 0xff; // ULA, link-local, multicast
   }
   return false;
+}
+
+/** The 16 bytes of an IPv6 address (with "::" and a dotted IPv4 tail), or null when it is not one. */
+export function ipv6Bytes(address: string): number[] | null {
+  let text = address.split('%')[0];
+  let tail: number[] | null = null;
+  const dotted = text.match(/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (dotted) {
+    tail = dotted.slice(1).map(Number);
+    if (tail.some((x) => x > 255)) return null;
+    text = `${text.slice(0, -dotted[0].length)}0:0`;
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const groups = (part: string) => (part === '' ? [] : part.split(':'));
+  const head = groups(halves[0]);
+  const rest = halves.length === 2 ? groups(halves[1]) : [];
+  const missing = 8 - head.length - rest.length;
+  if ((halves.length === 1 && missing !== 0) || missing < 0) return null;
+  const all = [...head, ...Array<string>(halves.length === 2 ? missing : 0).fill('0'), ...rest];
+  if (all.length !== 8 || all.some((g) => !/^[0-9a-f]{1,4}$/i.test(g))) return null;
+  const bytes = all.flatMap((g) => [parseInt(g, 16) >> 8, parseInt(g, 16) & 0xff]);
+  if (tail) bytes.splice(12, 4, ...tail);
+  return bytes;
 }
 
 export interface VoiceImage {
@@ -752,7 +786,8 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
 
     if (msg.type === 'message') {
       const text = typeof msg.text === 'string' ? msg.text.trim() : '';
-      const id = typeof msg.id === 'string' && msg.id.length <= 64 ? msg.id : '';
+      // Letters, digits, - and _ only: the id becomes part of the message id and of the photo's folder name.
+      const id = typeof msg.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(msg.id) ? msg.id : '';
       const image = parseImage(msg.image);
       if (typeof image === 'string') {
         send(ws, { type: 'error', reply_to: id || undefined, message: image });
@@ -847,8 +882,9 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       // Whatever was being answered is dropped: the app has already cleared its screen.
       closeAll();
       const clearId = `voice-clear-${clock().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-      unboundClears = [clearId];
-      void resetConversation(chatId, clearId)
+      unboundClears.push(clearId); // two taps in a row: both /clear rows may lead the next batch
+      // The next message waits for the /clear to be written, as after a pause: it must reach the new conversation.
+      const reset = resetConversation(chatId, clearId)
         .then((count) => {
           clearsPending += count;
           log.info('Voice conversation reset', { sessions: count });
@@ -858,6 +894,10 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
           log.error('Voice conversation reset failed', { err: String(err) });
           send(ws, { type: 'conversation_reset', ok: false });
         });
+      resetting = reset;
+      void reset.then(() => {
+        if (resetting === reset) resetting = null;
+      });
       return;
     }
 
@@ -1083,13 +1123,14 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
 
       server.on('upgrade', (req, socket, head) => {
         const address = req.socket.remoteAddress ?? 'unknown';
-        if (loginRefused(address) || !tokenMatches(req.headers['authorization'], currentToken())) {
+        // The right token always gets in: behind a reverse proxy every client has the proxy's address, and wrong tries
+        // from anyone would otherwise lock the phone out. Wrong tries are counted and, past the limit, not even checked.
+        if (!tokenMatches(req.headers['authorization'], currentToken())) {
           if (!loginRefused(address)) noteFailedLogin(address);
           socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
           socket.destroy();
           return;
         }
-        failedLogins.delete(address);
         wss!.handleUpgrade(req, socket, head, (ws) => handleConnection(ws));
       });
 
@@ -1136,6 +1177,11 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       if (livenessTimer) clearInterval(livenessTimer);
       pingTimer = livenessTimer = null;
       closeAll();
+      // The agent's questions shown on the phone get their answer now: the 'close' event comes after `client` is gone.
+      for (const [actionId, asked] of questionActions) {
+        questionActions.delete(actionId);
+        answerQuestion(asked.id, 'nessuna scelta: il canale voce si è fermato prima della risposta');
+      }
       client?.close(1001, 'server shutting down');
       client = null;
       capabilities = null;
@@ -1200,8 +1246,10 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
 
       if (!live) {
         // No live request: a scheduled task, a message the agent sends on its own, or a late answer. Text becomes a
-        // notification (kept while the phone is offline); an action is not sent, since nobody asked for it now.
-        if (text) {
+        // notification (kept while the phone is offline); an action is not sent, since nobody asked for it now. A
+        // "working" line ("Cerco sul Web...") or a tool's lead line says what is being done for a request: without one
+        // it would only be a stray notification, or a push that wakes the phone for nothing.
+        if (text && !working && !action) {
           if (client && client.readyState === WebSocket.OPEN && capabilities) {
             send(client, { type: 'notify', text });
           } else {
@@ -1272,7 +1320,7 @@ registerChannelAdapter('voice', {
     ]);
     const get = (k: string) => process.env[k] || env[k];
     const enabled = get('VOICE_ENABLED');
-    if (!enabled || enabled === 'false') return null;
+    if (!enabled || ['false', '0', 'no', 'off'].includes(enabled.trim().toLowerCase())) return null;
 
     const authToken = get('VOICE_AUTH_TOKEN');
     if (!authToken || authToken.length < MIN_TOKEN_LENGTH) {

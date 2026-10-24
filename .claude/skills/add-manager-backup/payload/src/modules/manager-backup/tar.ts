@@ -175,8 +175,17 @@ export interface PackItem {
 
 const END_OF_ARCHIVE = Buffer.alloc(BLOCK * 2);
 
+/**
+ * A file that vanished or shrank between the listing and its reading. Given, packing goes on: the entry keeps the size
+ * its header announced (the manifest counts it) and the missing bytes are zeros. Without it, packing stops.
+ */
+export type OnChanged = (archivePath: string, how: 'vanished' | 'shrank') => void;
+
 /** Serialise entries into a tar byte stream. */
-export async function* packEntries(items: AsyncIterable<PackItem> | Iterable<PackItem>): AsyncGenerator<Buffer> {
+export async function* packEntries(
+  items: AsyncIterable<PackItem> | Iterable<PackItem>,
+  onChanged?: OnChanged,
+): AsyncGenerator<Buffer> {
   for await (const item of items as AsyncIterable<PackItem>) {
     yield encodeEntryHeader(item.meta);
     if (item.meta.type !== 'file' || item.meta.size === 0) continue;
@@ -185,7 +194,7 @@ export async function* packEntries(items: AsyncIterable<PackItem> | Iterable<Pac
         throw new TarError('size_mismatch', `${item.meta.path} content length differs from its header`);
       yield item.content;
     } else if (item.source) {
-      yield* readExactly(item.source, item.meta.size, item.meta.path);
+      yield* readExactly(item.source, item.meta.size, item.meta.path, onChanged);
     } else {
       throw new TarError('missing_source', `no source for ${item.meta.path}`);
     }
@@ -194,15 +203,32 @@ export async function* packEntries(items: AsyncIterable<PackItem> | Iterable<Pac
   yield END_OF_ARCHIVE;
 }
 
-async function* readExactly(file: string, size: number, label: string): AsyncGenerator<Buffer> {
-  const handle = await fs.promises.open(file, 'r');
+async function* zeros(size: number): AsyncGenerator<Buffer> {
+  for (let left = size; left > 0; left -= 1024 * 1024) yield Buffer.alloc(Math.min(left, 1024 * 1024));
+}
+
+async function* readExactly(file: string, size: number, label: string, onChanged?: OnChanged): AsyncGenerator<Buffer> {
+  let handle: fs.promises.FileHandle;
+  try {
+    handle = await fs.promises.open(file, 'r');
+  } catch (error) {
+    if (!onChanged || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    onChanged(label, 'vanished');
+    yield* zeros(size);
+    return;
+  }
   try {
     let remaining = size;
     const chunk = Buffer.allocUnsafe(Math.min(size, 1024 * 1024));
     let position = 0;
     while (remaining > 0) {
       const { bytesRead } = await handle.read(chunk, 0, Math.min(chunk.length, remaining), position);
-      if (bytesRead === 0) throw new TarError('file_changed', `${label} shrank while being archived`);
+      if (bytesRead === 0) {
+        if (!onChanged) throw new TarError('file_changed', `${label} shrank while being archived`);
+        onChanged(label, 'shrank');
+        yield* zeros(remaining);
+        return;
+      }
       yield Buffer.from(chunk.subarray(0, bytesRead));
       remaining -= bytesRead;
       position += bytesRead;

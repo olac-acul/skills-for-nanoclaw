@@ -31,8 +31,12 @@ export interface Day {
 
 type Fetch = (url: string) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 
+/**
+ * No redirects: 3B Meteo could send an unknown name to another page that still has a strip of days, whose forecast
+ * would then be given for the place asked. A redirect is "no page" (the next name, then Open-Meteo).
+ */
 const get: Fetch = (url) =>
-  fetch(url, { headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+  fetch(url, { headers: { 'User-Agent': USER_AGENT }, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS) });
 
 /** 3B Meteo's address for a place: lower case, no accents or apostrophes, "+" between words ("cassano+dadda"). */
 export function threeBSlug(name: string): string {

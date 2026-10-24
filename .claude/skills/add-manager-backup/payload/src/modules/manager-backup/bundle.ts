@@ -116,6 +116,12 @@ export interface CreateBundleOptions {
   consistency?: BundleManifest['consistency'];
   gzipLevel?: number;
   onProgress?: (progress: { phase: 'snapshot' | 'pack'; entries: number; bytes: number }) => void;
+  /**
+   * A best-effort backup (agents at work) goes on when a file vanishes or shrinks while it is read: that file keeps its
+   * announced size, padded with zeros, and is reported here. So does a quiescent one, since an agent may start while it
+   * runs; the caller then records it as best-effort. A cold backup stops instead.
+   */
+  onChanged?: (archivePath: string, how: 'vanished' | 'shrank') => void;
 }
 
 export function newBackupId(now: Date = new Date()): string {
@@ -382,7 +388,14 @@ export async function createBundle(options: CreateBundleOptions): Promise<Bundle
     await fs.promises.mkdir(path.dirname(destFile), { recursive: true, mode: 0o700 });
     const out = fs.createWriteStream(partial, { mode: 0o600, flags: 'wx' });
     await pipeline(
-      Readable.from(packEntries(everything())),
+      Readable.from(
+        packEntries(
+          everything(),
+          (options.consistency ?? 'best-effort') !== 'cold'
+            ? (archivePath, how) => options.onChanged?.(archivePath, how)
+            : undefined,
+        ),
+      ),
       zlib.createGzip({ level: options.gzipLevel ?? 3 }),
       async function* (source: AsyncIterable<Buffer>) {
         yield* encryptStream(source, key);

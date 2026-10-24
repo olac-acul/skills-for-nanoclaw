@@ -386,7 +386,9 @@ describe('finished transactions', () => {
     const second = await restoreBundle({ host: target.host, bundleFile, key, mode: 'full' });
     await rollbackRestore(target.host, second.txn);
     // the folder's own .gitignore stays; of the transactions, only the latest
-    expect(fs.readdirSync(path.join(target.project, TXN_DIR)).filter((name) => !name.startsWith('.'))).toEqual([second.txn]);
+    expect(fs.readdirSync(path.join(target.project, TXN_DIR)).filter((name) => !name.startsWith('.'))).toEqual([
+      second.txn,
+    ]);
     await expect(commitRestore(target.host, second.txn)).rejects.toMatchObject({ code: 'nothing_to_roll_back' });
   });
 });

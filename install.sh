@@ -237,7 +237,8 @@ choose_address() {
 
 set_env() {
   # $1 key, $2 value: replace or append in the install's .env (kept private).
-  in_install "touch .env && chmod 600 .env && grep -v '^$1=' .env >.env.installer-tmp; echo '$1=$2' >>.env.installer-tmp; mv .env.installer-tmp .env"
+  # umask 077: the temporary file that replaces .env must be private from its first byte (mv keeps its mode).
+  in_install "umask 077 && touch .env && chmod 600 .env && grep -v '^$1=' .env >.env.installer-tmp; echo '$1=$2' >>.env.installer-tmp; mv .env.installer-tmp .env"
 }
 
 # OpenCode summarizes a long conversation (auto-compaction) only when it knows a context limit, and NanoClaw's
@@ -370,7 +371,7 @@ step_finish() {
    Done. As $NC_USER (su - $NC_USER):
      cd ~/nanoclaw && pnpm exec tsx scripts/manager-panel.ts status     the panel
      cd ~/nanoclaw && pnpm exec tsx scripts/manager-backup.ts schedule status
-     node ~/skills-for-nanoclaw/scripts/update-install.mjs prepare       update NanoClaw later (then cutover)
+     node ~/skills-for-nanoclaw/scripts/update-install.mjs prepare --install ~/nanoclaw    update NanoClaw later (then cutover)
    The guide: ~/skills-for-nanoclaw/docs/guide.md
 INFO
 }

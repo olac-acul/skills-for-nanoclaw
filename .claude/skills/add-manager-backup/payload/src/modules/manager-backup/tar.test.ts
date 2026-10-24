@@ -409,3 +409,36 @@ describe('walkTree with a refusal rule', () => {
     expect(skipped.sort()).toEqual(['state/bad', 'state/escape']);
   });
 });
+
+describe('files that change while a best-effort backup reads them', () => {
+  const item = (name: string, size: number): PackItem => ({
+    meta: meta({ path: `state/${name}`, size }),
+    source: path.join(tmp, name),
+  });
+
+  it('stops by default, so a cold backup never hides a change', async () => {
+    fs.writeFileSync(path.join(tmp, 'kept.txt'), 'abc');
+    await expect(collect(packEntries([item('gone.txt', 5)]))).rejects.toThrow();
+    await expect(collect(packEntries([item('kept.txt', 10)]))).rejects.toThrow(TarError);
+  });
+
+  it('keeps the announced sizes, fills with zeros and reports each one', async () => {
+    fs.writeFileSync(path.join(tmp, 'short.txt'), 'abc');
+    fs.writeFileSync(path.join(tmp, 'whole.txt'), 'hello');
+    const changed: string[] = [];
+    const archive = await collect(
+      packEntries([item('gone.txt', 4), item('short.txt', 6), item('whole.txt', 5)], (p, how) =>
+        changed.push(`${p} ${how}`),
+      ),
+    );
+    expect(changed).toEqual(['state/gone.txt vanished', 'state/short.txt shrank']);
+    const read: Array<[string, string]> = [];
+    for await (const entry of readTar(chunked(archive, 512)))
+      read.push([entry.meta.path, (await collect(entry.body)).toString('latin1')]);
+    expect(read).toEqual([
+      ['state/gone.txt', '\0\0\0\0'],
+      ['state/short.txt', 'abc\0\0\0'],
+      ['state/whole.txt', 'hello'],
+    ]);
+  });
+});

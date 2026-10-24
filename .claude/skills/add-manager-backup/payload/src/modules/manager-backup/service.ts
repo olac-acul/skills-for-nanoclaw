@@ -119,6 +119,7 @@ export class BackupService {
       : counter && before === 0
         ? 'quiescent'
         : 'best-effort';
+    let changed = 0;
     const manifest = await createBundle({
       host,
       key,
@@ -127,10 +128,13 @@ export class BackupService {
       includeMachineIdentity: options.includeMachineIdentity,
       consistency: consistencyAtStart,
       onProgress: options.onProgress,
+      onChanged: () => {
+        changed += 1;
+      },
     });
-    // Agents that started while the snapshot ran make the result best-effort.
+    // Agents that started while the snapshot ran, or files that changed under it, make the result best-effort.
     const agentsNow = counter ? counter() : 0;
-    const consistency = !options.hostStopped && agentsNow > 0 ? 'best-effort' : manifest.consistency;
+    const consistency = !options.hostStopped && (agentsNow > 0 || changed > 0) ? 'best-effort' : manifest.consistency;
     const record = this.toRecord(manifest, fs.statSync(file).size, consistency, options.trigger ?? 'manual');
     fs.writeFileSync(this.metaPath(id), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
     return { record, key: formatKey(key) };

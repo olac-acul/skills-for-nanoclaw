@@ -348,7 +348,9 @@ async function prepare(install, flags) {
   const fetch = install.git('fetch', remote, '--prune');
   if (fetch.status !== 0) fail(`git fetch ${remote} failed: ${fetch.stderr}`);
   const controllerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-controller-'));
-  const archive = run('bash', ['-lc', `git archive ${remote}/main scripts src/install-slug.ts | tar -x -C ${JSON.stringify(controllerDir)}`], { cwd: install.dir });
+  // Every value quoted for the shell: the remote's name comes from the command line.
+  const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+  const archive = run('bash', ['-lc', `git archive ${shellQuote(`${remote}/main`)} scripts src/install-slug.ts | tar -x -C ${shellQuote(controllerDir)}`], { cwd: install.dir });
   if (archive.status !== 0) fail(`could not load the updater from ${remote}/main: ${archive.stderr}`);
 
   say('Preparing the update in a separate copy (the install is not touched)…');
