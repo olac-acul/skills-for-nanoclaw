@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { writeFileAtomic } from './atomic-file.js';
 import { readEnvKeys, updateEnvKeys } from './env-file.js';
 import { qrMatrix, type QrMatrix } from './qr.js';
 
@@ -223,19 +224,12 @@ export function createPhonePort(options: PhoneOptions): PhonePort {
       const code = makePairingCode();
       const expiresAt = new Date(now() + PAIRING_TTL_MS).toISOString();
       fs.mkdirSync(dataDir, { recursive: true });
-      // A name of its own, created exclusively: a file (or link) left at a fixed name would keep its own mode.
-      const temp = `${pairingFile}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
       // Only the code's hash is kept; the code itself lives in the QR code that is about to be shown.
-      try {
-        fs.writeFileSync(
-          temp,
-          JSON.stringify({ hash: crypto.createHash('sha256').update(code).digest('hex'), expiresAt, attempts: 0 }),
-          { mode: 0o600, flag: 'wx' },
-        );
-        fs.renameSync(temp, pairingFile);
-      } finally {
-        fs.rmSync(temp, { force: true });
-      }
+      writeFileAtomic(
+        pairingFile,
+        JSON.stringify({ hash: crypto.createHash('sha256').update(code).digest('hex'), expiresAt, attempts: 0 }),
+        0o600,
+      );
       return { matrix: (options.matrix ?? qrMatrix)(pairingLink(address.url, code)), expiresAt };
     },
 

@@ -17,6 +17,8 @@ import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 
+import { ipv6Groups, mappedIpv4 } from './ipv6.js';
+
 /** Networks that are reachable only from this host or its LAN/VPN. */
 function localRanges(): net.BlockList {
   const list = new net.BlockList();
@@ -60,25 +62,6 @@ function blockedRanges(): net.BlockList {
 export type AddressClass = 'blocked' | 'local' | 'public';
 
 /** The eight 16-bit groups of an IPv6 literal, or null when it is not one. */
-function ipv6Groups(address: string): number[] | null {
-  let text = address.split('%')[0].toLowerCase();
-  const dotted = /^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/.exec(text);
-  if (dotted) {
-    const octets = dotted[2].split('.').map(Number);
-    if (octets.some((octet) => octet > 255)) return null;
-    text = `${dotted[1]}${((octets[0] << 8) | octets[1]).toString(16)}:${((octets[2] << 8) | octets[3]).toString(16)}`;
-  }
-  const halves = text.split('::');
-  if (halves.length > 2) return null;
-  const parse = (part: string): number[] => (part === '' ? [] : part.split(':').map((group) => parseInt(group, 16)));
-  const head = parse(halves[0]);
-  const tail = halves.length === 2 ? parse(halves[1]) : [];
-  const fill = 8 - head.length - tail.length;
-  if (halves.length === 2 ? fill < 1 : fill !== 0) return null;
-  const groups = [...head, ...new Array<number>(halves.length === 2 ? fill : 0).fill(0), ...tail];
-  return groups.every((group) => Number.isInteger(group) && group >= 0 && group <= 0xffff) ? groups : null;
-}
-
 const v4 = (high: number, low: number): string => [high >> 8, high & 255, low >> 8, low & 255].join('.');
 
 export function classifyAddress(
@@ -88,9 +71,8 @@ export function classifyAddress(
   const groups = net.isIPv6(raw) ? ipv6Groups(raw) : null;
   if (groups) {
     // IPv4-mapped (::ffff:a.b.c.d, however it is spelled): judged as the IPv4 address it carries.
-    if (groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff) {
-      return classifyAddress(v4(groups[6], groups[7]), ranges);
-    }
+    const mapped = mappedIpv4(groups);
+    if (mapped) return classifyAddress(mapped, ranges);
     // NAT64 (64:ff9b::/96) and 6to4 (2002::/16) carry an IPv4 destination; a blocked one stays blocked.
     // Otherwise the address is public: reaching it goes through a gateway, so only HTTPS is accepted.
     const embedded =

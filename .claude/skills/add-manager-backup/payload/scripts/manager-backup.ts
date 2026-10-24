@@ -57,6 +57,7 @@ import {
   validateSchedule,
 } from '../src/modules/manager-backup/schedule.js';
 import { BackupService } from '../src/modules/manager-backup/service.js';
+import { readHidden } from '../src/modules/manager-backup/terminal.js';
 import { countBusySessions, createUpstreamHost } from '../src/modules/manager-backup/upstream-host.js';
 
 function fail(message: string): never {
@@ -65,19 +66,7 @@ function fail(message: string): never {
 }
 
 async function readSecret(question: string): Promise<string> {
-  if (!process.stdin.isTTY) fail('no key provided; set MANAGER_BACKUP_KEY or use --key-file');
-  const rl = readline.createInterface({ input: process.stdin, output: process.stderr, terminal: true });
-  const write = (rl as unknown as { _writeToOutput: (text: string) => void })._writeToOutput.bind(rl);
-  process.stderr.write(question);
-  (rl as unknown as { _writeToOutput: (text: string) => void })._writeToOutput = () => undefined;
-  return new Promise((resolve) => {
-    rl.question('', (answer) => {
-      (rl as unknown as { _writeToOutput: (text: string) => void })._writeToOutput = write;
-      rl.close();
-      process.stderr.write('\n');
-      resolve(answer);
-    });
-  });
+  return (await readHidden(question)) ?? fail('no key provided; set MANAGER_BACKUP_KEY or use --key-file');
 }
 
 async function obtainKey(flags: Map<string, string | true>): Promise<Buffer> {

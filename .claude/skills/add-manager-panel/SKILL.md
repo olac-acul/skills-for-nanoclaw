@@ -42,6 +42,7 @@ payload/scripts/tsconfig.manager-credentials.json -> scripts/tsconfig.manager-cr
 payload/scripts/tsconfig.manager-panel.json -> scripts/tsconfig.manager-panel.json
 payload/src/modules/manager-panel/app-icon.test.ts -> src/modules/manager-panel/app-icon.test.ts
 payload/src/modules/manager-panel/app-icon.ts -> src/modules/manager-panel/app-icon.ts
+payload/src/modules/manager-panel/atomic-file.ts -> src/modules/manager-panel/atomic-file.ts
 payload/src/modules/manager-panel/auth.ts -> src/modules/manager-panel/auth.ts
 payload/src/modules/manager-panel/backend.ts -> src/modules/manager-panel/backend.ts
 payload/src/modules/manager-panel/backup-job.test.ts -> src/modules/manager-panel/backup-job.test.ts
@@ -56,6 +57,8 @@ payload/src/modules/manager-panel/env-file.ts -> src/modules/manager-panel/env-f
 payload/src/modules/manager-panel/fixtures/fake-backend.ts -> src/modules/manager-panel/fixtures/fake-backend.ts
 payload/src/modules/manager-panel/guide-html.ts -> src/modules/manager-panel/guide-html.ts
 payload/src/modules/manager-panel/index.ts -> src/modules/manager-panel/index.ts
+payload/src/modules/manager-panel/ipv6.test.ts -> src/modules/manager-panel/ipv6.test.ts
+payload/src/modules/manager-panel/ipv6.ts -> src/modules/manager-panel/ipv6.ts
 payload/src/modules/manager-panel/model-endpoint.test.ts -> src/modules/manager-panel/model-endpoint.test.ts
 payload/src/modules/manager-panel/model-endpoint.ts -> src/modules/manager-panel/model-endpoint.ts
 payload/src/modules/manager-panel/model-settings.test.ts -> src/modules/manager-panel/model-settings.test.ts

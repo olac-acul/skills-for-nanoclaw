@@ -35,6 +35,7 @@ import {
   newBackupId,
   openBundleStream,
   openUntrustedDb,
+  pidAlive,
   readManifest,
   verifyBundle,
   type BundleManifest,
@@ -162,18 +163,6 @@ export async function hostIsRunning(host: BackupHost): Promise<boolean> {
     client.once('error', () => done(false));
     client.setTimeout(1500, () => done(false));
   });
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ESRCH') return false;
-    if (code === 'EPERM') return true; // exists, owned by someone else
-    throw error;
-  }
 }
 
 /**
@@ -322,12 +311,11 @@ export function filterEnvForRehearsal(text: string): { kept: string; dropped: st
   const dropped: string[] = [];
   const kept: string[] = [];
   for (const line of text.split('\n')) {
-    const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
-    if (!match) {
+    const name = envKey(line);
+    if (!name) {
       if (line.trim() === '' || line.trim().startsWith('#')) kept.push(line);
       continue;
     }
-    const name = match[1];
     const allowed = ENV_KEEP_KEYS.has(name) || ENV_KEEP_PREFIXES.some((prefix) => name.startsWith(prefix));
     if (allowed && !ENV_SECRET.test(name) && !ENV_URL_CREDENTIALS.test(line)) kept.push(line);
     else dropped.push(name);
@@ -356,10 +344,9 @@ export function mergeTargetOwnedEnv(
   bundleText: string | null,
   targetText: string | null,
 ): { text: string | null; kept: string[] } {
-  const owned = (key: string): boolean => TARGET_OWNED_ENV.some((pattern) => pattern.test(key));
   const targetLines = (targetText ?? '').split('\n').filter((line) => {
     const key = envKey(line);
-    return key !== null && owned(key);
+    return key !== null && isTargetOwnedEnv(key);
   });
   if (bundleText === null && targetLines.length === 0) return { text: null, kept: [] };
   const bundleLines = (bundleText ?? '')
@@ -367,7 +354,7 @@ export function mergeTargetOwnedEnv(
     .split('\n')
     .filter((line) => {
       const key = envKey(line);
-      return key === null || !owned(key);
+      return key === null || !isTargetOwnedEnv(key);
     });
   const text = [
     ...bundleLines.filter((line, index, all) => !(line === '' && (index === 0 || all[index - 1] === ''))),

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -220,6 +221,30 @@ describe('createBundle', () => {
   });
 });
 
+describe('snapshotSqliteFile', () => {
+  it('waits for a writer without holding up the event loop, then copies what it committed', async () => {
+    const file = path.join(tmp, 'mailbox.db');
+    const writer = new Database(file); // rollback journal, as the containers' mailboxes use
+    writer.exec('CREATE TABLE t (v INTEGER)');
+    writer.exec('BEGIN EXCLUSIVE');
+    writer.exec('INSERT INTO t VALUES (1)');
+    let ticks = 0;
+    const ticker = setInterval(() => ticks++, 10);
+    const release = setTimeout(() => writer.exec('COMMIT'), 200);
+    try {
+      await snapshotSqliteFile(file, path.join(tmp, 'copy.db'));
+    } finally {
+      clearInterval(ticker);
+      clearTimeout(release);
+      writer.close();
+    }
+    expect(ticks).toBeGreaterThan(5);
+    const copy = new Database(path.join(tmp, 'copy.db'), { readonly: true });
+    expect(copy.prepare('SELECT COUNT(*) AS c FROM t').get()).toEqual({ c: 1 });
+    copy.close();
+  });
+});
+
 describe('workspace links', () => {
   it('keeps links that point outside the tree (a virtual environment) through backup, verify and restore, but not in data/', async () => {
     fs.mkdirSync(path.join(project, 'groups', 'g1', 'venv', 'bin'), { recursive: true });
@@ -247,6 +272,22 @@ describe('verifyBundle', () => {
     expect(result.manifest.id).toBe(manifest.id);
     expect(result.entries).toBe(manifest.contents.entries);
     expect(result.files).toBe(manifest.contents.files);
+  });
+
+  it('removes the work folder a killed backup left behind, and only that one', async () => {
+    const { destFile, key } = await makeBundle();
+    const dead = spawnSync(process.execPath, ['-e', '']).pid!;
+    const stale = fs.mkdtempSync(path.join(os.tmpdir(), `manager-backup-create-${dead}-`));
+    fs.writeFileSync(path.join(stale, 'v2.db'), 'plaintext snapshot');
+    const live = fs.mkdtempSync(path.join(os.tmpdir(), `manager-backup-verify-${process.pid}-`));
+    try {
+      await verifyBundle(destFile, key);
+      expect(fs.existsSync(stale)).toBe(false);
+      expect(fs.existsSync(live)).toBe(true);
+    } finally {
+      fs.rmSync(stale, { recursive: true, force: true });
+      fs.rmSync(live, { recursive: true, force: true });
+    }
   });
 
   it('rejects the wrong key', async () => {

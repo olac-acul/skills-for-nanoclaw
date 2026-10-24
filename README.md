@@ -79,6 +79,7 @@ node scripts/privacy-scan.mjs --history-content         # ...and every line ever
 git config core.hooksPath .githooks                     # enable the pre-commit gate
 node scripts/testbed.mjs fix && node scripts/testbed.mjs check   # skills against an upstream checkout (see the script)
 node scripts/compose.mjs                                # apply every skill to a clean upstream clone, as CI does
+node scripts/update-rehearsal.mjs                       # then update-install on that tree: a clean merge and a conflict
 ```
 
 The pre-commit hook regenerates what is derived from hand-written files (the guide page served by the panel from

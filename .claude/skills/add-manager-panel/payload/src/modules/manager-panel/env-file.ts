@@ -4,8 +4,9 @@
  * keep the file private. Values are restricted to a conservative character set
  * so nothing typed in a browser can inject another line or a quote.
  */
-import crypto from 'node:crypto';
 import fs from 'node:fs';
+
+import { writeFileAtomic } from './atomic-file.js';
 
 const KEY = /^[A-Z][A-Z0-9_]*$/;
 // `[` and `]` are literal in an unquoted .env value; they let an IPv6 endpoint such as http://[fd00::1]:8000/v1 through.
@@ -113,25 +114,6 @@ export function updateEnvKeys(
   for (const [key, value] of Object.entries(changes)) {
     if (value !== null && !written.has(key)) out.push(`${key}=${render(value)}`);
   }
-  // A fresh, exclusively created name: nothing already there (a leftover file, a symlink) is reused or followed.
-  const temporary = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-  const fd = fs.openSync(
-    temporary,
-    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
-    mode,
-  );
-  try {
-    try {
-      fs.writeSync(fd, out.length ? `${out.join('\n')}\n` : '');
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    fs.renameSync(temporary, file);
-  } catch (error) {
-    // The temporary file holds every secret in the .env; never leave it behind.
-    fs.rmSync(temporary, { force: true });
-    throw error;
-  }
+  writeFileAtomic(file, out.length ? `${out.join('\n')}\n` : '', mode);
   return before;
 }

@@ -177,12 +177,57 @@ export const EXCLUDED_DESCRIPTION = [
   'logs, node_modules, git history, container images',
 ];
 
-/** Snapshot a SQLite file that another process may be writing. */
-export function snapshotSqliteFile(source: string, dest: string): void {
-  const db = new Database(source, { readonly: true, fileMustExist: true });
+export function pidAlive(pid: number): boolean {
   try {
-    db.pragma('busy_timeout = 10000');
-    db.exec(`VACUUM INTO '${dest.replace(/'/g, "''")}'`);
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return false;
+    if (code === 'EPERM') return true; // exists, owned by someone else
+    throw error;
+  }
+}
+
+/**
+ * A private work folder in the temp directory, named after this process. It holds decrypted database snapshots, so
+ * one left by a process that was killed before its cleanup ran is removed when the next backup or verification starts.
+ */
+async function workDir(kind: 'create' | 'verify'): Promise<string> {
+  const base = os.tmpdir();
+  for (const name of await fs.promises.readdir(base).catch(() => [] as string[])) {
+    const match = /^manager-backup-(?:create|verify)-(\d+)-/.exec(name);
+    if (!match || pidAlive(Number(match[1]))) continue;
+    const full = path.join(base, name);
+    const stat = await fs.promises.lstat(full).catch(() => null);
+    if (stat?.isDirectory() && stat.uid === process.getuid?.()) await fs.promises.rm(full, { recursive: true, force: true });
+  }
+  return fs.promises.mkdtemp(path.join(base, `manager-backup-${kind}-${process.pid}-`));
+}
+
+const SNAPSHOT_WAIT_MS = 10_000;
+const SNAPSHOT_RETRY_MS = 50;
+
+/**
+ * Snapshot a SQLite file that another process may be writing. A container holding the write lock
+ * makes the copy wait: the wait happens between attempts, never inside SQLite (a busy timeout
+ * would sleep on the host's event loop and stall routing and the voice channel while it lasts).
+ */
+export async function snapshotSqliteFile(source: string, dest: string): Promise<void> {
+  const db = new Database(source, { readonly: true, fileMustExist: true, timeout: 0 });
+  try {
+    const deadline = Date.now() + SNAPSHOT_WAIT_MS;
+    for (;;) {
+      try {
+        db.exec(`VACUUM INTO '${dest.replace(/'/g, "''")}'`);
+        return;
+      } catch (error) {
+        const code = (error as { code?: unknown }).code;
+        if ((code !== 'SQLITE_BUSY' && code !== 'SQLITE_LOCKED') || Date.now() >= deadline) throw error;
+        await fs.promises.rm(dest, { force: true });
+        await new Promise((resolve) => setTimeout(resolve, SNAPSHOT_RETRY_MS));
+      }
+    }
   } finally {
     db.close();
   }
@@ -255,7 +300,7 @@ function dirItem(archivePath: string): PackItem {
 export async function createBundle(options: CreateBundleOptions): Promise<BundleManifest> {
   const { host, key, destFile } = options;
   const id = options.id ?? newBackupId();
-  const work = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'manager-backup-'));
+  const work = await workDir('create');
   const partial = `${destFile}.partial`;
   const progress = { entries: 0, bytes: 0 };
 
@@ -274,7 +319,7 @@ export async function createBundle(options: CreateBundleOptions): Promise<Bundle
       if (!SESSION_DB.test(rel)) return null;
       const copy = path.join(work, `session-${snapshotCount++}.db`);
       try {
-        snapshotSqliteFile(full, copy);
+        await snapshotSqliteFile(full, copy);
       } catch (error) {
         throw new BundleError('source_unreadable', `cannot snapshot ${rel}: ${(error as Error).message}`);
       }
@@ -640,7 +685,7 @@ export async function freeBytes(dir: string): Promise<number> {
  * written, and the database snapshots written for the integrity check are bounded by free space.
  */
 export async function verifyBundle(file: string, key: Buffer): Promise<VerifyResult> {
-  const work = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'manager-backup-verify-'));
+  const work = await workDir('verify');
   try {
     const checker = new MemberChecker(BUNDLE_POLICY);
     let manifest: BundleManifest | null = null;

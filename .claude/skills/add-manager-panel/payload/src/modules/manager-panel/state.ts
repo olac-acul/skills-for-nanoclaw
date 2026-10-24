@@ -16,6 +16,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { writeFileAtomic } from './atomic-file.js';
 import { isPasswordRecord } from './password.js';
 
 export interface AdminRecord {
@@ -73,16 +74,7 @@ export class PanelState {
   }
 
   private writeText(name: string, text: string): void {
-    const file = this.file(name);
-    const temporary = `${file}.${process.pid}.tmp`;
-    const fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
-    try {
-      fs.writeSync(fd, text);
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    fs.renameSync(temporary, file);
+    writeFileAtomic(this.file(name), text, 0o600);
   }
 
   private writeJson(name: string, value: unknown): void {

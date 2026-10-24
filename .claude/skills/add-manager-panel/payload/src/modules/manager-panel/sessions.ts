@@ -16,6 +16,7 @@
  */
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 
+import { ipv6Groups, mappedIpv4 } from './ipv6.js';
 import type { PanelState } from './state.js';
 
 export const IDLE_MS = 30 * 60 * 1000;
@@ -139,19 +140,9 @@ export class SessionStore {
  */
 export function clientKey(address: string | undefined): string {
   const raw = (address ?? 'unknown').toLowerCase().split('%')[0];
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(raw);
-  if (mapped) return mapped[1];
-  if (!raw.includes(':')) return raw;
-  const halves = raw.split('::');
-  if (halves.length > 2) return raw;
-  const head = halves[0] ? halves[0].split(':') : [];
-  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
-  const missing = 8 - head.length - tail.length;
-  if (halves.length === 2 ? missing < 1 : missing !== 0) return raw;
-  const groups = halves.length === 2 ? [...head, ...Array<string>(missing).fill('0'), ...tail] : head;
-  const prefix = groups.slice(0, 4).map((group) => (/^[0-9a-f]{1,4}$/.test(group) ? parseInt(group, 16) : NaN));
-  if (prefix.some(Number.isNaN)) return raw;
-  return `${prefix.map((n) => n.toString(16)).join(':')}::/64`;
+  const groups = raw.includes(':') ? ipv6Groups(raw) : null;
+  if (!groups) return raw;
+  return mappedIpv4(groups) ?? `${groups.slice(0, 4).map((n) => n.toString(16)).join(':')}::/64`;
 }
 
 interface ClientRecord {

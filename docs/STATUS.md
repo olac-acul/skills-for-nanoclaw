@@ -34,7 +34,8 @@ from upstream's OneCLI skill; the panel configures them, it does not replace the
 ## Tested
 
 - Applies with upstream's own skill engine to a clean checkout and passes upstream's build and the skills'
-  tests; a nightly workflow repeats this against upstream `main`.
+  tests; a nightly workflow repeats this against upstream `main`, then takes the composed tree through
+  `update-install.mjs` (a clean merge and a conflict) against a local stand-in for a newer upstream.
 - On real installs (Debian 13, Docker, OneCLI, OpenCode): panel and first-run setup, model and provider
   changes with rollback, ChatGPT subscription login and API key, Claude credential, removal of credentials,
   hot and scheduled backups, restore, rollback and rehearsal on a second machine, and the migration of an

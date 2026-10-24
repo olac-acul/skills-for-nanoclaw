@@ -33,3 +33,7 @@ jobs:
       - run: node scripts/compose.mjs --ref "$UPSTREAM_REF"
         env:
           UPSTREAM_REF: ${{ github.event.inputs.ref || 'main' }}
+      # The nightly run also takes the composed tree through update-install.mjs: a clean merge and a conflict,
+      # against a local stand-in for upstream with one more commit.
+      - run: node scripts/update-rehearsal.mjs
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

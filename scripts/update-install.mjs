@@ -33,11 +33,12 @@ import path from 'node:path';
 import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 
+import { DEFAULT_SKILLS } from './install-skills.mjs';
 import { commitAll, markerMatches, stampMarker } from './upgrade-marker.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const SKILLS_REPO = path.resolve(HERE, '..');
-export const OUR_SKILLS = ['add-manager-backup', 'add-manager-panel', 'add-voice', 'add-assistant-prompt'];
+export const OUR_SKILLS = DEFAULT_SKILLS;
 
 // ---------------------------------------------------------------------------
 // Pure helpers (tested)

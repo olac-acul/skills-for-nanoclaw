@@ -11,7 +11,6 @@
  * recovery path for a forgotten password.
  */
 import path from 'node:path';
-import readline from 'node:readline';
 
 import { DATA_DIR } from '../src/config.js';
 import { readEnvFile } from '../src/env.js';
@@ -22,6 +21,7 @@ import {
   hashPassword,
   passwordProblem,
 } from '../src/modules/manager-panel/password.js';
+import { readHidden } from '../src/modules/manager-backup/terminal.js';
 import { PanelState } from '../src/modules/manager-panel/state.js';
 
 function fail(message: string): never {
@@ -30,20 +30,7 @@ function fail(message: string): never {
 }
 
 async function readSecret(question: string): Promise<string> {
-  if (!process.stdin.isTTY) fail('a password can only be entered at an interactive terminal');
-  const rl = readline.createInterface({ input: process.stdin, output: process.stderr, terminal: true });
-  const hidden = rl as unknown as { _writeToOutput: (text: string) => void };
-  const write = hidden._writeToOutput.bind(rl);
-  process.stderr.write(question);
-  hidden._writeToOutput = () => undefined;
-  return new Promise((resolve) => {
-    rl.question('', (answer) => {
-      hidden._writeToOutput = write;
-      rl.close();
-      process.stderr.write('\n');
-      resolve(answer);
-    });
-  });
+  return (await readHidden(question)) ?? fail('a password can only be entered at an interactive terminal');
 }
 
 async function main(): Promise<void> {

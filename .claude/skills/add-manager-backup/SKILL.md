@@ -65,6 +65,7 @@ payload/src/modules/manager-backup/service.test.ts -> src/modules/manager-backup
 payload/src/modules/manager-backup/service.ts -> src/modules/manager-backup/service.ts
 payload/src/modules/manager-backup/tar.test.ts -> src/modules/manager-backup/tar.test.ts
 payload/src/modules/manager-backup/tar.ts -> src/modules/manager-backup/tar.ts
+payload/src/modules/manager-backup/terminal.ts -> src/modules/manager-backup/terminal.ts
 payload/src/modules/manager-backup/upstream-host.test.ts -> src/modules/manager-backup/upstream-host.test.ts
 payload/src/modules/manager-backup/upstream-host.ts -> src/modules/manager-backup/upstream-host.ts
 payload/src/modules/manager-backup/voice-files.test.ts -> src/modules/manager-backup/voice-files.test.ts
