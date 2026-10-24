@@ -46,6 +46,7 @@ export class RestoreError extends Error {
   constructor(
     readonly code:
       | 'host_running'
+      | 'agents_running'
       | 'backup_newer'
       | 'unsupported_database'
       | 'insufficient_space'
@@ -176,12 +177,6 @@ function pidAlive(pid: number): boolean {
 }
 
 /**
- * Run `fn` while holding the install's restore lock (a file beside the transaction directories),
- * so two restores, or a restore and a rollback or commit, never work on the same install at once.
- * A lock whose holder is gone (crash, kill) is taken over. The socket probe in `hostIsRunning`
- * stays: this only guards against other backup commands.
- */
-/**
  * The transactions' folder, made private and invisible to Git: until a restore is committed or rolled back it holds
  * the previous .env among other things, and a `git add -A` (an update's baseline commit) must never take it.
  */
@@ -193,6 +188,24 @@ export function ensureTxnDir(projectRoot: string): string {
   return dir;
 }
 
+/** The restore lock is held by a live process: a restore, rollback or commit is running on the install. */
+export function restoreInProgress(projectRoot: string): boolean {
+  try {
+    const holder = Number.parseInt(fs.readFileSync(path.join(projectRoot, TXN_DIR, '.lock'), 'utf8'), 10);
+    return Number.isInteger(holder) && pidAlive(holder);
+    // eslint-disable-next-line no-catch-all/no-catch-all -- no lock file: nothing is running
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Run `fn` while holding the install's restore lock (a file beside the transaction directories),
+ * so two restores, or a restore and a rollback or commit, never work on the same install at once.
+ * A lock whose holder is gone (crash, kill) is taken over. The socket probe in `hostIsRunning`
+ * stays: this only guards against other backup commands. Creating a backup checks it too
+ * ([restoreInProgress]), so a scheduled backup never copies a half-restored install.
+ */
 async function withLock<T>(host: BackupHost, fn: () => Promise<T>): Promise<T> {
   const file = path.join(ensureTxnDir(host.projectRoot), '.lock');
   const token = `${process.pid} ${crypto.randomBytes(6).toString('hex')}\n`;
@@ -583,6 +596,15 @@ async function restoreLocked(options: RestoreOptions): Promise<RestoreResult> {
   const { host, bundleFile, key, mode } = options;
   if (!options.skipHostProbe && (await hostIsRunning(host))) {
     throw new RestoreError('host_running', 'the NanoClaw host is running; stop the service before restoring');
+  }
+  // The host's socket is gone, but an agent container left behind would go on writing into the folders moved aside.
+  const containers = options.skipHostProbe ? 0 : host.runningAgentContainers?.();
+  if (containers) {
+    throw new RestoreError(
+      'agents_running',
+      `${containers} agent container(s) of this install are still running; stop them before restoring ` +
+        `(docker stop $(docker ps -q --filter label=nanoclaw-install=${host.installSlug()}))`,
+    );
   }
   const plan = await planRestore(host, bundleFile, key);
   // Reads the whole bundle against the manifest's own counts and sizes (and checks temp space).

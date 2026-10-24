@@ -12,12 +12,13 @@ import path from 'node:path';
 import { createBundle, newBackupId, verifyBundle, type BundleManifest, type VerifyResult } from './bundle.js';
 import { formatKey, generateKey, parseKey } from './crypto.js';
 import type { BackupHost } from './host.js';
+import { restoreInProgress } from './restore.js';
 
 const ID_PATTERN = /^\d{8}T\d{6}Z-[0-9a-f]{6}$/;
 
 export class BackupError extends Error {
   constructor(
-    readonly code: 'agents_busy' | 'not_found' | 'invalid_id' | 'exists',
+    readonly code: 'agents_busy' | 'restore_running' | 'not_found' | 'invalid_id' | 'exists',
     message: string,
   ) {
     super(message);
@@ -92,6 +93,12 @@ export class BackupService {
   /** Create a backup. Resolves with the record and the key, which is not stored anywhere. */
   async create(options: CreateOptions = {}): Promise<{ record: BackupRecord; key: string }> {
     const { host } = this.options;
+    // A scheduled backup must not copy an install a restore is halfway through replacing.
+    if (restoreInProgress(host.projectRoot))
+      throw new BackupError(
+        'restore_running',
+        'a restore, rollback or commit is running on this install; try again later',
+      );
     const counter = host.busyAgentCount;
     let before = 0;
     if (counter) {

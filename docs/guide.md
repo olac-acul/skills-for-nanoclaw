@@ -841,7 +841,9 @@ release; `--channel edge` follows upstream's `main`); settles a merge that confl
 them; refreshes in the copy the skills of this repository that the install has, puts the panel's import line in its
 place and checks that the voice channel's and the assistant prompt's core changes still fit; then builds and runs the
 whole test suite there. Whatever fails, the install keeps running as it was (with at most that baseline commit). If
-the merge conflicts in anything else, it stops and says where.
+the merge conflicts in anything else, it stops and says where: resolve the conflicts in that copy and commit the merge
+there, then `node scripts/update-install.mjs resume --install ~/nanoclaw` goes on from there (refresh, tests), or
+`abandon` drops the update.
 
 `cutover` stops the service and the agents' containers, rebuilds the image if upstream's change needs it, and starts
 again; plan for several minutes without the assistant. If the release asks for the OneCLI gateway to be moved to
@@ -975,7 +977,7 @@ All optional, in the install's `.env` (or the environment).
 | `PANEL_ALLOW_PUBLIC` | `false` | `true` accepts connections from public internet addresses. Not recommended. |
 | `PANEL_BACKUP_DIR` | `~/.local/share/nanoclaw-backups/<install>` | Where the panel keeps backups. |
 | `PANEL_BACKUP_WAIT_SECONDS` | `60` | How long a backup waits for busy agents before going ahead anyway. |
-| `MANAGER_BACKUP_DIR` | same as above | Backups folder for the terminal tool. |
+| `MANAGER_BACKUP_DIR` | `PANEL_BACKUP_DIR`, else as above | Backups folder for the terminal tool and the weekly timer. |
 | `MANAGER_BACKUP_KEY` | unset | The key for the terminal tool (prefer `--key-file` or the prompt). |
 
 ### Terminal commands

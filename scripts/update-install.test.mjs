@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import { REGENERABLE_LOCKS, describePhase, installedSkills, gatewayUpgradeScript, lockOnlyConflict, onecliTarget, parseControllerJson, planRequirements, validPin } from './update-install.mjs';
+import { Install, REGENERABLE_LOCKS, describePhase, installedSkills, gatewayUpgradeScript, lockOnlyConflict, onecliTarget, parseControllerJson, planRequirements, validPin } from './update-install.mjs';
 
 const ONECLI = {
   id: 'breaking-change-x',
@@ -82,5 +82,40 @@ test('refreshes only the skills the install has: no voice files on an install wi
     assert.deepEqual(installedSkills(dir), ['add-manager-backup', 'add-manager-panel']);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('each install keeps its own prepared update', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-home-'));
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const a = new Install(path.join(home, 'a'));
+    const b = new Install(path.join(home, 'b'));
+    a.writePending({ id: 'tx-a', phase: 'validated' });
+    assert.equal(a.readPending()?.id, 'tx-a');
+    assert.equal(b.readPending(), null);
+    b.writePending({ id: 'tx-b', phase: 'conflict' });
+    assert.equal(a.readPending()?.id, 'tx-a');
+    b.clearPending();
+    assert.equal(b.readPending(), null);
+    assert.equal(a.readPending()?.id, 'tx-a');
+  } finally {
+    process.env.HOME = saved;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('a pending file of an earlier version is taken only by the install its copy came from', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-home-'));
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    fs.mkdirSync(path.join(home, '.nanoclaw-updates'));
+    fs.writeFileSync(path.join(home, '.nanoclaw-updates', 'pending.json'), JSON.stringify({ id: 'old', stageRoot: path.join(home, 'gone') }));
+    assert.equal(new Install(path.join(home, 'a')).readPending(), null);
+  } finally {
+    process.env.HOME = saved;
+    fs.rmSync(home, { recursive: true, force: true });
   }
 });

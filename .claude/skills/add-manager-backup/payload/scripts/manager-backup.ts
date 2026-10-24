@@ -34,6 +34,7 @@ import readline from 'node:readline';
 import { CENTRAL_DB_PATH, DATA_DIR } from '../src/config.js';
 import { closeDb, initDb } from '../src/db/connection.js';
 import type { DbDriver } from '../src/db/driver.js';
+import { readEnvFile } from '../src/env.js';
 import { getInstallSlug } from '../src/install-slug.js';
 // Registers module migrations so the restore can tell what this code knows about.
 import '../src/modules/index.js';
@@ -94,6 +95,9 @@ function backupsDir(flags: Map<string, string | true>): string {
   const dir = flags.get('dir');
   if (typeof dir === 'string') return path.resolve(dir);
   if (process.env.MANAGER_BACKUP_DIR) return path.resolve(process.env.MANAGER_BACKUP_DIR);
+  // The panel's folder, so that backups made here (the weekly timer among them) show in the panel too.
+  const panelDir = (process.env.PANEL_BACKUP_DIR || readEnvFile(['PANEL_BACKUP_DIR']).PANEL_BACKUP_DIR)?.trim();
+  if (panelDir) return path.resolve(panelDir);
   return path.join(os.homedir(), '.local', 'share', 'nanoclaw-backups', getInstallSlug());
 }
 

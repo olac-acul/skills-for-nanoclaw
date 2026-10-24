@@ -30,6 +30,15 @@ afterEach(() => {
 });
 
 describe('create', () => {
+  it('refuses while a restore holds the install, and goes ahead once it is over', async () => {
+    const lockDir = path.join(install.host.projectRoot, '.manager-backup-txn');
+    fs.mkdirSync(lockDir, { recursive: true });
+    fs.writeFileSync(path.join(lockDir, '.lock'), `${process.pid} abc\n`);
+    await expect(service().create({ hostStopped: true })).rejects.toMatchObject({ code: 'restore_running' });
+    fs.writeFileSync(path.join(lockDir, '.lock'), '999999999 gone\n'); // a holder that no longer exists
+    await expect(service().create({ hostStopped: true })).resolves.toBeTruthy();
+  });
+
   it('returns a key once, stores nothing secret next to the bundle, and lists the backup', async () => {
     const svc = service();
     const { record, key } = await svc.create({ hostStopped: true });

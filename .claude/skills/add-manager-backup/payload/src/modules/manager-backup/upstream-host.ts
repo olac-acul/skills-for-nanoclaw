@@ -5,7 +5,7 @@
  * barrel wiring). When upstream renames or moves something, this is where the
  * compatibility build breaks and where the fix goes.
  */
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -97,8 +97,9 @@ export function countBusySessions(dataDir: string): number {
     for (const session of fs.readdirSync(groupDir)) {
       const outbound = path.join(groupDir, session, 'outbound.db');
       if (!fs.existsSync(outbound)) continue;
-      const db = new Database(outbound, { readonly: true });
+      let db: InstanceType<typeof Database> | undefined;
       try {
+        db = new Database(outbound, { readonly: true });
         db.pragma('busy_timeout = 2000');
         const row = db.prepare("SELECT COUNT(*) AS c FROM processing_ack WHERE status = 'processing'").get() as {
           c: number;
@@ -109,11 +110,26 @@ export function countBusySessions(dataDir: string): number {
         // An unreadable or older-format mailbox is treated as busy: better to wait than to copy mid-write.
         busy++;
       } finally {
-        db.close();
+        db?.close();
       }
     }
   }
   return busy;
+}
+
+/** Containers carrying this install's label (upstream stamps `nanoclaw-install=<slug>` on every one it starts). */
+export function countInstallContainers(slug: string): number | null {
+  try {
+    const out = execFileSync('docker', ['ps', '-q', '--filter', `label=nanoclaw-install=${slug}`], {
+      encoding: 'utf8',
+      timeout: 15_000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return out.split('\n').filter((line) => line.trim()).length;
+    // eslint-disable-next-line no-catch-all/no-catch-all -- no docker, or it does not answer: unknown, not zero
+  } catch {
+    return null;
+  }
 }
 
 export interface UpstreamHostOptions {
@@ -143,6 +159,7 @@ export function createUpstreamHost(options: UpstreamHostOptions): BackupHost {
       readInventory(projectRoot).gateway === 'onecli' ? listOneCliSecretNames() : null,
     registeredMigrations: () => getRegisteredMigrations().map((migration) => migration.name),
     busyAgentCount: options.busyAgentCount,
+    runningAgentContainers: () => countInstallContainers(getInstallSlug(projectRoot)),
     async describeDb(): Promise<DbDescription> {
       const rows = await db.all<{ name: string }>('SELECT name FROM schema_version ORDER BY name');
       const counts: Record<string, number> = {};

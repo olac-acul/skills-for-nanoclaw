@@ -238,6 +238,14 @@ describe('safety checks', () => {
     }
   });
 
+  it('refuses while agent containers of the install are still running', async () => {
+    const host = { ...target.host, runningAgentContainers: () => 2 };
+    await expect(restoreBundle({ host, bundleFile, key, mode: 'full' })).rejects.toMatchObject({
+      code: 'agents_running',
+    });
+    expect(query(path.join(target.project, 'data', 'v2.db'), 'SELECT id FROM agent_groups')).toEqual([{ id: 't1' }]);
+  });
+
   it('refuses before touching anything when the bundle is for newer code', async () => {
     const older = makeHost(target.project, target.home, ['one']);
     await expect(restoreBundle({ host: older, bundleFile, key, mode: 'full' })).rejects.toBeInstanceOf(RestoreError);

@@ -57,6 +57,11 @@ export interface BackupHost {
    * undefined when not running inside the host process.
    */
   busyAgentCount?: () => number;
+  /**
+   * Agent containers of this install still running (alive at all, busy or not); null when that cannot be known
+   * (no container runtime to ask).
+   */
+  runningAgentContainers?: () => number | null;
   /** Write a consistent point-in-time copy of the central database to `dest`. */
   snapshotCentralDb(dest: string): Promise<void>;
 }

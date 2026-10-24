@@ -15,6 +15,7 @@
  *     is done here, with the database dump upstream's guide asks for, instead of by hand.
  *
  *   node scripts/update-install.mjs prepare [--install DIR] [--channel stable|beta|edge] [--remote NAME] [--yes]
+ *   node scripts/update-install.mjs resume   [--install DIR]      (after resolving a merge conflict by hand)
  *   node scripts/update-install.mjs validate [--install DIR]      (tests the prepared copy again)
  *   node scripts/update-install.mjs cutover [--install DIR] [--yes]
  *   node scripts/update-install.mjs status  [--install DIR]
@@ -25,6 +26,7 @@
  * Run it as the user that owns the install, from a checkout of this repository.
  */
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -149,11 +151,15 @@ async function confirm(question, yes) {
   return answer === 'y' || answer === 'yes' || answer === 's' || answer === 'si' || answer === 'sì';
 }
 
-class Install {
+export class Install {
   constructor(dir) {
     this.dir = path.resolve(dir);
     this.stateDir = path.join(os.homedir(), '.nanoclaw-updates');
-    this.pendingFile = path.join(this.stateDir, 'pending.json');
+    // One per install: two installs of the same user must not pick up each other's prepared update.
+    const tag = crypto.createHash('sha256').update(this.dir).digest('hex').slice(0, 12);
+    this.pendingFile = path.join(this.stateDir, `pending-${tag}.json`);
+    // Written by earlier versions of this tool, for whichever install they prepared.
+    this.legacyPendingFile = path.join(this.stateDir, 'pending.json');
   }
   sh(command, options = {}) {
     return run('bash', ['-lc', command], { cwd: this.dir, ...options });
@@ -168,18 +174,35 @@ class Install {
     return { ...result, json: parseControllerJson(result.stdout) };
   }
   readPending() {
-    try {
-      return JSON.parse(fs.readFileSync(this.pendingFile, 'utf8'));
-    } catch {
-      return null;
+    for (const file of [this.pendingFile, this.legacyPendingFile]) {
+      let pending;
+      try {
+        pending = JSON.parse(fs.readFileSync(file, 'utf8'));
+      } catch {
+        continue;
+      }
+      // A legacy file without an install named is taken only if its staged copy was made from this install.
+      const mine = pending.install ? pending.install === this.dir : this.stagedFromHere(pending.stageRoot);
+      if (mine) return { ...pending, file };
     }
+    return null;
+  }
+  /** The staging copy is a git worktree of the install it was made from. */
+  stagedFromHere(stageRoot) {
+    if (!stageRoot || !fs.existsSync(stageRoot)) return false;
+    const common = run('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: stageRoot }).stdout.trim();
+    return common !== '' && path.resolve(common) === path.join(this.dir, '.git');
   }
   writePending(value) {
+    const { file: _file, ...rest } = value;
     fs.mkdirSync(this.stateDir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(this.pendingFile, JSON.stringify(value, null, 2), { mode: 0o600 });
+    fs.writeFileSync(this.pendingFile, JSON.stringify({ ...rest, install: this.dir }, null, 2), { mode: 0o600 });
+    if (_file === this.legacyPendingFile) fs.rmSync(this.legacyPendingFile, { force: true });
   }
   clearPending() {
+    const pending = this.readPending();
     fs.rmSync(this.pendingFile, { force: true });
+    if (pending?.file === this.legacyPendingFile) fs.rmSync(this.legacyPendingFile, { force: true });
   }
 }
 
@@ -378,11 +401,32 @@ async function prepare(install, flags) {
     }
   }
   if (prepared.json.phase !== 'prepared') {
-    say(`\nThe merge needs a person: resolve it in ${prepared.json.stageRoot}, then run:\n  pnpm exec tsx ${controllerDir}/scripts/update-nanoclaw.ts resume --project-root ${install.dir} --id ${prepared.json.id}`);
+    say(`\nThe merge needs a person: resolve the conflicts in ${prepared.json.stageRoot} and commit the merge there, then run:\n  node scripts/update-install.mjs resume --install ${install.dir}\n(or \`abandon\` to drop the update; the install keeps running as it was either way).`);
     if (prepared.json.lastError) say(`\n${String(prepared.json.lastError).slice(0, 600)}`);
     install.writePending({ id: prepared.json.id, controllerDir, stageRoot: prepared.json.stageRoot, phase: prepared.json.phase, remote });
     process.exit(3);
   }
+  await afterMerge(install, controllerDir, prepared.json, remote);
+}
+
+/** A merge resolved by hand: upstream's updater takes it from there, then the skills are refreshed and tested. */
+async function resume(install, flags) {
+  const pending = install.readPending();
+  if (!pending || ['validated', 'validation-failed'].includes(pending.phase)) fail('no update is waiting for a merge: see `status`');
+  preflight(install);
+  const resumed = install.controller(pending.controllerDir, 'resume', ['--id', pending.id]);
+  if (!resumed.json) fail(`the updater gave no answer:\n${resumed.stderr.slice(-1500)}`);
+  say(describePhase(resumed.json));
+  if (resumed.json.phase !== 'prepared') {
+    install.writePending({ ...pending, phase: resumed.json.phase });
+    fail(`the merge is not settled yet in ${pending.stageRoot}: resolve and commit it, then run \`resume\` again (or \`abandon\`).`, 3);
+  }
+  await afterMerge(install, pending.controllerDir, { ...pending, ...resumed.json, id: pending.id, stageRoot: pending.stageRoot }, pending.remote);
+}
+
+/** Refresh this repository's skills in the merged copy, test it and record it as ready for `cutover`. */
+async function afterMerge(install, controllerDir, merged, remote) {
+  const prepared = { json: merged };
 
   say('Refreshing this repository\'s skills in the copy…');
   try {
@@ -508,7 +552,7 @@ async function abandon(install) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const { command, flags } = parseArgs(process.argv.slice(2));
   const install = openInstall(flags);
-  const table = { prepare, validate, cutover, status, abandon };
-  if (!table[command]) fail(`unknown command ${command}; use prepare, validate, cutover, status or abandon`);
+  const table = { prepare, resume, validate, cutover, status, abandon };
+  if (!table[command]) fail(`unknown command ${command}; use prepare, resume, validate, cutover, status or abandon`);
   await table[command](install, flags);
 }

@@ -90,7 +90,7 @@ pnpm exec vitest run src/modules/manager-backup
 
 ## Use
 
-Backups go to `$MANAGER_BACKUP_DIR` (default `~/.local/share/nanoclaw-backups/<install>`).
+Backups go to `$MANAGER_BACKUP_DIR`, else to the panel's `PANEL_BACKUP_DIR` (from the environment or `.env`), else to `~/.local/share/nanoclaw-backups/<install>`.
 Keep copies somewhere other than the disk that holds the install.
 
 ```bash
