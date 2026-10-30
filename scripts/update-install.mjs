@@ -44,12 +44,52 @@ export const OUR_SKILLS = DEFAULT_SKILLS;
 // Pure helpers (tested)
 // ---------------------------------------------------------------------------
 
-/** The OneCLI gateway version an update requirement asks for, or null when it is another requirement. */
+/**
+ * The OneCLI gateway version an update requirement asks for, or null when it is another requirement. Two wordings:
+ * "exactly 1.42.0" (2026.10.0) and "upgrade the gateway to 1.45.0 and the `onecli` CLI to 2.11.0" (2026.10.1).
+ */
 export function onecliTarget(requirement) {
   const text = `${requirement?.description ?? ''}`;
   if (!/OneCLI/i.test(text) || !/gateway/i.test(text)) return null;
-  const match = /exactly\s+(\d+\.\d+\.\d+)/i.exec(text);
+  const match = /exactly\s+(\d+\.\d+\.\d+)/i.exec(text) ?? /gateway to\s+(\d+\.\d+\.\d+)/i.exec(text);
   return match ? match[1] : null;
+}
+
+/** The `onecli` CLI version the same requirement asks for, or null when it names none. */
+export function onecliCliTarget(requirement) {
+  if (!onecliTarget(requirement)) return null;
+  const match = /CLI(?:`)?\s+to\s+(\d+\.\d+\.\d+)/i.exec(`${requirement?.description ?? ''}`);
+  return match ? match[1] : null;
+}
+
+/** A gateway at 1.44 or later converts the vault once on its first start (secret modes become per-agent grants). */
+export function convertsVault(pin) {
+  const [major, minor] = `${pin}`.split('.').map(Number);
+  return major > 1 || (major === 1 && minor >= 44);
+}
+
+/**
+ * The `onecli` CLI at `version`, as upstream's guide installs it (the release's tarball into the place of the current
+ * binary), checked against the release's checksums.txt first. The CLI keeps no state: swapping it loses nothing.
+ */
+export function cliInstallScript(version) {
+  if (!validPin(version)) throw new Error(`not a CLI version: ${version}`);
+  return `
+set -e
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cd "$work"
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+F=onecli_${version}_linux_$ARCH.tar.gz
+curl -fsSLO "https://github.com/onecli/onecli-cli/releases/download/v${version}/$F"
+curl -fsSLO "https://github.com/onecli/onecli-cli/releases/download/v${version}/checksums.txt"
+grep " $F\$" checksums.txt | sha256sum -c - >/dev/null || { echo "the CLI download does not match checksums.txt" >&2; exit 1; }
+tar -xzf "$F" onecli
+TARGET=$(command -v onecli || echo ~/.local/bin/onecli)
+install -m 0755 onecli "$TARGET"
+onecli version 2>/dev/null | grep -q "${version}" || { echo "onecli version does not report ${version}" >&2; exit 1; }
+echo "onecli CLI ${version} installed at $TARGET"
+`;
 }
 
 /** Split requirements into the one this tool does itself and the ones that need a person. */
@@ -93,6 +133,11 @@ export function describePhase(result) {
 export function validPin(value) {
   return /^\d+\.\d+\.\d+$/.test(value ?? '');
 }
+
+/** Shell lines setting GW (and ONECLI_PROJECT when the install names one) from the install's .env. */
+const ONECLI_ENV =
+  'GW=$(grep -E \'^ONECLI_URL=\' .env | tail -1 | cut -d= -f2- | tr -d "\\"\' "); ' +
+  'P=$(grep -E \'^ONECLI_PROJECT_ID=\' .env | tail -1 | cut -d= -f2- | tr -d "\\"\' "); [ -n "$P" ] && export ONECLI_PROJECT="$P";';
 
 /** The commands that move the gateway to `pin`, as upstream's guide gives them (docs/onecli-upgrades.md). */
 export function gatewayUpgradeScript(pin) {
@@ -474,9 +519,35 @@ async function cutover(install, flags) {
   if (!pending || pending.phase !== 'validated') fail('no validated update is waiting: run `prepare` first');
   preflight(install);
   const plan = planRequirements(pending.requirements);
-  if (plan.manual.length > 0) {
-    for (const requirement of plan.manual) say(`This update has a requirement this tool does not do: ${String(requirement.description).slice(0, 400)}`);
-    fail('do those by hand (upstream\'s guides), or use upstream\'s own /update-nanoclaw for this update', 5);
+  // A requirement this tool does not do is shown whole; the person says it is done by hand or does not apply here
+  // (an answer at the terminal each time: --yes does not answer these).
+  for (const requirement of plan.manual) {
+    say(`\nA requirement this tool does not do (${requirement.id}):\n${String(requirement.description).slice(0, 900)}`);
+    if (!(await confirm('Done by hand, or it does not apply to this install?', false))) {
+      fail('do it by hand first (upstream\'s guides), then run `cutover` again; nothing was changed', 5);
+    }
+  }
+  // OneCLI before any downtime: the CLI the release pins (no state), and, for a gateway that converts the vault on its
+  // first start (1.44+), upstream's check of what the conversion would delete. Findings stop here.
+  for (const requirement of plan.automatic) {
+    const pin = onecliTarget(requirement);
+    const cli = onecliCliTarget(requirement);
+    if (cli) {
+      say(`Installing the onecli CLI ${cli} (it keeps no state; the gateway is not touched)…`);
+      const installed = install.sh(cliInstallScript(cli));
+      if (installed.status !== 0) fail(`the CLI could not be installed: ${(installed.stderr || installed.stdout).slice(-600)}\nNothing else was changed.`, 5);
+      say(installed.stdout.trim());
+    }
+    if (convertsVault(pin)) {
+      const check = path.join(pending.stageRoot, '.claude', 'skills', 'add-onecli', 'scripts', 'pre-upgrade-check.sh');
+      if (!fs.existsSync(check)) fail(`OneCLI ${pin} converts the vault and upstream's check (${check}) is missing: follow docs/onecli-upgrades.md by hand`, 5);
+      say(`Checking what the vault conversion of OneCLI ${pin} would delete or change (upstream's pre-upgrade check)…`);
+      const checked = install.sh(`${ONECLI_ENV} GW="$GW" sh '${check}'`);
+      say(`${checked.stdout}${checked.stderr}`.trim());
+      if (checked.status !== 0) {
+        fail(`the check found rules the conversion would delete or change, or could not read them (above). Nothing was changed but the CLI: see docs/onecli-upgrades.md in the prepared copy (${pending.stageRoot}).`, 5);
+      }
+    }
   }
   say(`About to update ${install.dir}: ${describePhase({ phase: 'cutover', channel: pending.channel, upstreamRef: pending.upstreamRef })}.`);
   say('This stops the service and the agents\' containers, rebuilds the image if needed, and starts again. Plan for several minutes without the assistant.');
@@ -495,6 +566,18 @@ async function cutover(install, flags) {
     const health = install.sh(`sleep 12; GW=$(grep -E '^ONECLI_URL=' .env | cut -d= -f2- | tr -d "\\"' "); curl -s "$GW/v1/health"; echo; docker inspect -f '{{.Config.Image}}' onecli`);
     if (!health.stdout.includes('"status":"ok"') || !health.stdout.includes(`:${pin}`)) fail(`the gateway does not report ${pin} and ok:\n${health.stdout}`, 7);
     say(`Gateway running ${pin}, health ok.`);
+    if (convertsVault(pin)) {
+      // The conversion runs once on this first start; upstream's post-check reads its result from the gateway's log.
+      const post = path.join(install.dir, '.claude', 'skills', 'add-onecli', 'scripts', 'post-upgrade-check.sh');
+      let converted = null;
+      for (let attempt = 0; attempt < 6; attempt++) {
+        converted = install.sh(`${ONECLI_ENV} GW="$GW" sh '${post}'`);
+        if (converted.status !== 1) break; // 1: not yet
+        run('sleep', ['10']);
+      }
+      say(`${converted.stdout}${converted.stderr}`.trim());
+      if (converted.status !== 0) fail(`the vault conversion did not report success (above). The update is cut over but not finished: see docs/onecli-upgrades.md, sections Verify and Rollback.`, 7);
+    }
     const ack = install.controller(pending.controllerDir, 'ack', [
       '--id',
       pending.id,
@@ -506,6 +589,20 @@ async function cutover(install, flags) {
       `set ONECLI_VERSION back to the previous version in ~/.onecli/.env, then: cd ~/.onecli && env -u ONECLI_VERSION docker compose pull onecli && env -u ONECLI_VERSION docker compose up -d (database dump: ~/onecli-db-backup-*.sql)`,
     ]);
     if (ack.status !== 0) fail(`the requirement could not be recorded: ${ack.stderr.slice(-600)}`);
+  }
+
+  for (const requirement of plan.manual) {
+    const ack = install.controller(pending.controllerDir, 'ack', [
+      '--id',
+      pending.id,
+      '--requirement',
+      requirement.id,
+      '--status',
+      'succeeded',
+      '--rollback',
+      'done by hand, or not applicable to this install, as the person confirmed before the cutover',
+    ]);
+    if (ack.status !== 0) fail(`the requirement ${requirement.id} could not be recorded: ${ack.stderr.slice(-600)}`);
   }
 
   const finished = install.controller(pending.controllerDir, 'finish', ['--id', pending.id]);
