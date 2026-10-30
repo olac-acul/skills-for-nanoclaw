@@ -500,6 +500,8 @@ describe('voice adapter', () => {
     expect(received.find((m) => m.type === 'delta')).toMatchObject({ reply_to: 'm3', text: 'Ecco la risposta.' });
     expect(received.slice(before).some((m) => m.type === 'notify')).toBe(false);
     expect(received.some((m) => m.type === 'conversation_reset')).toBe(false);
+    // the app is told where the conversation started over: before the request that came after the pause
+    expect(received.filter((m) => m.type === 'context_restarted')).toEqual([{ type: 'context_restarted', reply_to: 'm3' }]);
   });
 
   it('answers the request that replaced the one a pause reset was tied to', async () => {

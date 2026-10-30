@@ -3,7 +3,7 @@
  *
  * Protocol v1 (JSON, `type` field): see docs in the NanoVoice repo (docs/PROTOCOL.md).
  *  app -> host: hello, message, cancel, action_result, warm, push_endpoint, new_conversation
- *  host -> app: delta, action, working, done, error, notify, conversation_reset
+ *  host -> app: delta, action, working, done, error, notify, conversation_reset, context_restarted
  *
  * Single-operator, single-chat: one adapter instance = one messaging group with
  * `platform_id = "default"` (override with VOICE_PLATFORM_ID). One app connection at a time.
@@ -619,6 +619,8 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
     return resetConversation(chatId, clearId)
       .then((count) => {
         clearsPending += count;
+        // The app marks the place: the messages above it on the phone are no longer in the agent's conversation.
+        if (count > 0) send(client, { type: 'context_restarted', reply_to: pauseClear?.exchangeId ?? exchangeId });
         log.info('Voice conversation reset after a pause', {
           sessions: count,
           silentMinutes: Math.round(silentMs / 60_000),
