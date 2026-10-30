@@ -76,6 +76,43 @@ export function foldersWithVoiceSection(install) {
     .sort();
 }
 
+/**
+ * One run at a time on an install: two runs at once (one interrupted on the terminal goes on on the server) copy over
+ * each other's files and one commits the other's half-done work. The lock lives in data/, which Git ignores; one left
+ * by a run that is gone is taken over.
+ */
+export function holdInstallLock(install) {
+  const dir = path.join(install, 'data');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, '.install-skills.lock');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fs.writeFileSync(file, `${process.pid}\n`, { flag: 'wx' });
+      process.on('exit', () => {
+        try {
+          if (fs.readFileSync(file, 'utf8').trim() === String(process.pid)) fs.rmSync(file, { force: true });
+        } catch {
+          // already gone
+        }
+      });
+      return;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const holder = Number.parseInt(fs.readFileSync(file, 'utf8'), 10);
+      let alive = false;
+      try {
+        process.kill(holder, 0);
+        alive = true;
+      } catch (probe) {
+        alive = probe.code === 'EPERM';
+      }
+      if (alive && holder !== process.pid) fail(`another install-skills is running on this install (pid ${holder}): wait for it to finish`);
+      fs.rmSync(file, { force: true }); // left by a run that no longer exists
+    }
+  }
+  fail(`could not take the lock ${file}`);
+}
+
 function main() {
   let flags;
   try {
@@ -87,6 +124,7 @@ function main() {
   for (const file of ['package.json', 'scripts/skill-apply.ts', 'scripts/skill-directives.ts', 'src/cli/client.ts'])
     if (!fs.existsSync(path.join(install, file))) fail(`${install} is not a NanoClaw install (${file} is missing)`);
   process.umask(0o022); // some of upstream's tests depend on it; a login shell often has 002
+  holdInstallLock(install);
   // Read before anything changes: whether the skills can be committed alone, and whether the marker was in order.
   const wasClean = treeIsClean(install);
   const markerWasCurrent = markerMatches(install);

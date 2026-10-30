@@ -74,3 +74,24 @@ test('finds the groups whose instructions carry the voice section, and only thos
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('two runs on one install: the second one stops while the first holds the lock', () => {
+  const install = fs.mkdtempSync(path.join(os.tmpdir(), 'install-lock-'));
+  try {
+    fs.mkdirSync(path.join(install, 'data'));
+    // a live holder (this test process's parent stands in for the first run)
+    fs.writeFileSync(path.join(install, 'data', '.install-skills.lock'), `${process.ppid}\n`);
+    const script = `import { holdInstallLock } from ${JSON.stringify(path.join(here, 'install-skills.mjs'))}; holdInstallLock(${JSON.stringify(install)}); console.log('took it');`;
+    const busy = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+    assert.notEqual(busy.status, 0);
+    assert.match(busy.stderr, /another install-skills is running/);
+    // a lock left by a run that is gone is taken over, and released at exit
+    fs.writeFileSync(path.join(install, 'data', '.install-skills.lock'), '999999999\n');
+    const free = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+    assert.equal(free.status, 0, free.stderr);
+    assert.match(free.stdout, /took it/);
+    assert.equal(fs.existsSync(path.join(install, 'data', '.install-skills.lock')), false);
+  } finally {
+    fs.rmSync(install, { recursive: true, force: true });
+  }
+});
