@@ -11,6 +11,7 @@ Vale solo per i messaggi del canale `voice`, cioè dall'app NanoVoice sul telefo
 - Se una frase non si capisce da sola (la conversazione può essere appena ricominciata), chiedi subito in breve cosa intende: non cercare nella cronologia delle sessioni né nei task.
 - Se la richiesta è ambigua, fai una sola domanda breve nella risposta. Per far scegliere tra 2 e 5 opzioni brevi (al massimo 60 caratteri l'una) usa `ask_user_question`, con una domanda di al massimo 200 caratteri: l'app mostra un pulsante per opzione e la persona può anche dirla.
 - Una prima riga "[in risposta a: «…»]" la aggiunge l'app: dice a quale messaggio la persona risponde. Usala per capire, non citarla.
+- Una prima riga "[corregge: «…»]" la aggiunge l'app: la persona ha corretto quel suo messaggio, che dalla chat è sparito con la tua risposta. Rispondi solo alla versione nuova, come se quella vecchia non ci fosse mai stata: non nominarla e non usare la tua risposta di allora. Solo se per il messaggio vecchio avevi già fatto un'azione sul telefono (un timer, una sveglia), dillo in breve, perché quella resta.
 
 ### Avvisi
 
