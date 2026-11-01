@@ -3,7 +3,7 @@
  *
  * Protocol v1 (JSON, `type` field): see docs in the NanoVoice repo (docs/PROTOCOL.md).
  *  app -> host: hello, message, cancel, action_result, warm, push_endpoint, new_conversation
- *  host -> app: delta, action, working, done, error, notify, conversation_reset, context_restarted
+ *  host -> app: delta, action, working, done, error, notify, conversation_reset, context_restarted, conversation_idle
  *
  * Single-operator, single-chat: one adapter instance = one messaging group with
  * `platform_id = "default"` (override with VOICE_PLATFORM_ID). One app connection at a time.
@@ -524,8 +524,16 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
   let lastWarm = 0;
   const idleResetMs = opts.idleResetMs ?? 0;
   const clock = opts.now ?? Date.now;
-  let lastActivityAt = loadActivity();
+  const storedActivity = loadActivity();
+  let lastActivityAt = storedActivity.at;
   let activitySavedAt = 0;
+  /**
+   * The pause is over and the app was told (`conversation_idle`): its chat already shows a new conversation, so the next
+   * message starts one even if something came in between (an alert). Kept across restarts with the last message.
+   */
+  let pauseAnnounced = storedActivity.pauseAnnounced;
+  /** The connection told about it: once per connection, again after a reconnection. */
+  let pauseToldTo: WebSocket | null = null;
   /** A reset after a pause still being written: messages wait for it, so they land after the `/clear`. */
   let resetting: Promise<void> | null = null;
 
@@ -584,27 +592,63 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
   let pushEndpoint: string | null = loadPushEndpoint();
   let lastWakeAt = 0;
 
-  function loadActivity(): number {
-    if (!opts.activityPath) return 0;
+  function loadActivity(): { at: number; pauseAnnounced: boolean } {
+    if (!opts.activityPath) return { at: 0, pauseAnnounced: false };
     try {
-      const parsed = JSON.parse(fs.readFileSync(opts.activityPath, 'utf8')) as { last_message_at?: unknown };
-      return typeof parsed.last_message_at === 'number' ? parsed.last_message_at : 0;
+      const parsed = JSON.parse(fs.readFileSync(opts.activityPath, 'utf8')) as {
+        last_message_at?: unknown;
+        pause_announced?: unknown;
+      };
+      return {
+        at: typeof parsed.last_message_at === 'number' ? parsed.last_message_at : 0,
+        pauseAnnounced: parsed.pause_announced === true,
+      };
     } catch {
-      return 0;
+      return { at: 0, pauseAnnounced: false };
     }
   }
 
   /** A message went one way or the other. Written to disk at most once a minute: the pause is measured in minutes. */
   function noteActivity(): void {
     lastActivityAt = clock();
-    if (!opts.activityPath || lastActivityAt - activitySavedAt < ACTIVITY_SAVE_EVERY_MS) return;
+    if (lastActivityAt - activitySavedAt < ACTIVITY_SAVE_EVERY_MS) return;
     activitySavedAt = lastActivityAt;
+    saveActivity();
+  }
+
+  function saveActivity(): void {
+    if (!opts.activityPath) return;
     try {
       fs.mkdirSync(path.dirname(opts.activityPath), { recursive: true });
-      fs.writeFileSync(opts.activityPath, JSON.stringify({ last_message_at: lastActivityAt }), { mode: 0o600 });
+      const state = { last_message_at: lastActivityAt, ...(pauseAnnounced ? { pause_announced: true } : {}) };
+      fs.writeFileSync(opts.activityPath, JSON.stringify(state), { mode: 0o600 });
     } catch (err) {
       log.warn('Voice could not persist the time of the last message', { err });
     }
+  }
+
+  /**
+   * Tells the app that the pause is over, on its hello and as soon as the pause runs out while it is connected: it shows
+   * the new conversation right away instead of after the next request. That request then starts it, whatever comes in
+   * between, so what the app shows is always what the agent knows.
+   */
+  function announcePause(): void {
+    if (idleResetMs <= 0 || !client || !capabilities || pauseToldTo === client) return;
+    const over = idleResetMs > 0 && lastActivityAt > 0 && clock() - lastActivityAt > idleResetMs;
+    if (!pauseAnnounced && !over) return;
+    pauseToldTo = client;
+    send(client, { type: 'conversation_idle' });
+    if (pauseAnnounced) return;
+    pauseAnnounced = true;
+    saveActivity();
+  }
+
+  /** The conversation starts over now (a message after the pause, or the app's new conversation). */
+  function forgetPause(): void {
+    pauseToldTo = null;
+    if (!pauseAnnounced) return;
+    pauseAnnounced = false;
+    saveActivity();
   }
 
   /**
@@ -814,6 +858,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       log.info('Voice client connected', { capabilities: [...capabilities], locale: clientLocale });
       writeStatus(true);
       for (const text of pendingNotify.splice(0)) send(ws, { type: 'notify', text });
+      announcePause();
       return;
     }
 
@@ -843,8 +888,10 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       if (pauseClear && exchanges.get(pauseClear.exchangeId)?.cancelled !== false) rebindPauseClear(id);
       const previous = lastActivityAt; // 0: nothing known yet (first message ever, or no state file), no reset
       const silentMs = clock() - previous;
+      const announced = pauseAnnounced;
       noteActivity();
-      if (idleResetMs > 0 && previous > 0 && silentMs > idleResetMs) {
+      forgetPause();
+      if (idleResetMs > 0 && previous > 0 && (silentMs > idleResetMs || announced)) {
         const reset = resetAfterPause(silentMs, id);
         resetting = reset;
         void reset.then(() => {
@@ -926,6 +973,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
     if (msg.type === 'new_conversation') {
       // Whatever was being answered is dropped: the app has already cleared its screen.
       closeAll();
+      forgetPause();
       const clearId = `voice-clear-${clock().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
       unboundClears.push(clearId); // two taps in a row: both /clear rows may lead the next batch
       // The next message waits for the /clear to be written, as after a pause: it must reach the new conversation.
@@ -1207,7 +1255,9 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
             const silent = client;
             forgetClient(silent); // at once: a message arriving before 'close' fires must not go into the dead socket
             silent.terminate();
+            return;
           }
+          announcePause();
         },
         Math.max(50, Math.min(10_000, Math.floor(staleAfterMs / 4))),
       );

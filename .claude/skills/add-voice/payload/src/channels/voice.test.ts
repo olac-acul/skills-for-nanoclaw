@@ -616,6 +616,86 @@ describe('voice adapter', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('tells the app the pause is over when it connects, and the next message starts over even after an alert', async () => {
+    let t = 1_000_000;
+    let resets = 0;
+    const h = await start({ idleResetMs: 60_000, now: () => t, resetConversation: async () => (resets++, 1) });
+    const a = await connect(h);
+    a.ws.send(hello());
+    a.ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'uno' }));
+    await until(() => h.inbound.length === 1);
+    a.ws.close();
+    await until(() => !h.adapter.isConnected() || a.ws.readyState === WebSocket.CLOSED);
+
+    t += 120_000;
+    const b = await connect(h);
+    b.ws.send(hello());
+    await until(() => b.received.some((m) => m.type === 'conversation_idle'));
+    // an alert after the app showed the new conversation does not take it back
+    await h.adapter.deliver('voice:default', null, { kind: 'chat', content: { text: 'Promemoria.' } });
+    await until(() => b.received.some((m) => m.type === 'notify'));
+    b.ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm2', text: 'due' }));
+    await until(() => h.inbound.length === 2);
+    expect(resets).toBe(1);
+    expect(b.received.filter((m) => m.type === 'conversation_idle')).toHaveLength(1);
+    // the conversation is new now: the next message soon after goes on in it
+    b.ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm3', text: 'tre' }));
+    await until(() => h.inbound.length === 3);
+    expect(resets).toBe(1);
+  });
+
+  it('tells the app connected when the pause runs out, once, and never with the pause turned off', async () => {
+    let t = 1_000_000;
+    const on = await start({ idleResetMs: 60_000, now: () => t, staleAfterMs: 2_000, resetConversation: async () => 1 });
+    const off = await start({ idleResetMs: 0, now: () => t, staleAfterMs: 2_000, resetConversation: async () => 1 });
+    const clients: Array<{ ws: WebSocket; received: Msg[] }> = [];
+    for (const h of [on, off]) {
+      const c = await connect(h);
+      c.ws.send(hello());
+      c.ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'uno' }));
+      await until(() => h.inbound.length === 1);
+      clients.push(c);
+    }
+    t += 61_000;
+    await until(() => clients[0].received.some((m) => m.type === 'conversation_idle'));
+    await new Promise((r) => setTimeout(r, 1_100)); // two more checks
+    expect(clients[0].received.filter((m) => m.type === 'conversation_idle')).toHaveLength(1);
+    expect(clients[1].received.some((m) => m.type === 'conversation_idle')).toBe(false);
+  });
+
+  it('remembers across restarts that the app was told', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-activity-'));
+    const activityPath = path.join(dir, 'voice-activity.json');
+    let t = 1_000_000;
+    let resets = 0;
+    const options = { idleResetMs: 60_000, now: () => t, activityPath, resetConversation: async () => (resets++, 1) };
+    const first = await start(options);
+    const a = await connect(first);
+    a.ws.send(hello());
+    a.ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'uno' }));
+    await until(() => first.inbound.length === 1);
+    t += 120_000;
+    const b = await connect(first);
+    b.ws.send(hello());
+    await until(() => b.received.some((m) => m.type === 'conversation_idle'));
+    expect(JSON.parse(fs.readFileSync(activityPath, 'utf8'))).toEqual({ last_message_at: 1_000_000, pause_announced: true });
+    t += 61_000;
+    await first.adapter.deliver('voice:default', null, { kind: 'chat', content: { text: 'Promemoria.' } });
+    expect(JSON.parse(fs.readFileSync(activityPath, 'utf8'))).toEqual({ last_message_at: 1_181_000, pause_announced: true });
+    await first.adapter.teardown();
+
+    t += 1_000; // the host restarted, right after the alert
+    const second = await start(options);
+    const c = await connect(second);
+    c.ws.send(hello());
+    await until(() => c.received.some((m) => m.type === 'conversation_idle'));
+    c.ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm2', text: 'due' }));
+    await until(() => second.inbound.length === 1);
+    expect(resets).toBe(1);
+    expect(JSON.parse(fs.readFileSync(activityPath, 'utf8'))).toEqual({ last_message_at: 1_182_000 });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it('reads VOICE_IDLE_RESET_MINUTES: minutes, 0 to turn it off, the default otherwise', () => {
     expect(idleResetMinutes(undefined)).toBe(30);
     expect(idleResetMinutes('')).toBe(30);
