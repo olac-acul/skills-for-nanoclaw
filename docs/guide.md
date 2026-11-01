@@ -69,8 +69,9 @@ It goes through these steps, asking on the way:
    every address), then the one-time setup code for the administrator.
 6. **Weekly backups:** day, time and how many to keep; the backup key is shown once, to store in a password
    manager (see [Scheduled backups](#scheduled-backups)).
-7. **The voice channel** (if chosen): which agent answers the app, and the address it listens on. Then pair the
-   phone with the QR of the panel's Phone page.
+7. **The voice channel** (if chosen): which agent answers the app, and the address it listens on; then whether that
+   agent gets Python with matplotlib to draw charts (the app shows the pictures it sends; yes by default, about
+   200 MB more in its image). Then pair the phone with the QR of the panel's Phone page.
 8. **Extra skills:** with `--extra DIR`, each `DIR/<skill>/setup.sh` is offered and run (for example private
    skills of your own with an interactive setup).
 9. **Finishing:** the passwordless sudo is taken away again, if you agree.

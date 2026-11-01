@@ -9,6 +9,7 @@ import { WebSocket } from 'ws';
 import type { ChannelSetup, InboundMessage } from './adapter.js';
 import {
   actionResultText,
+  fileFrame,
   canonicalPairingCode,
   cleanDeviceName,
   createVoiceAdapter,
@@ -270,6 +271,74 @@ describe('voice adapter', () => {
       { type: 'delta', reply_to: 'm1', text: 'Oggi hai ricevuto tre email.' },
       { type: 'done', reply_to: 'm1' },
     ]);
+  });
+
+  it('sends a picture of the agent with its reply, and names any other file instead of losing it', async () => {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16)]);
+    const h = await start();
+    const { ws, received } = await connect(h);
+    ws.send(JSON.stringify({ type: 'hello', protocol: 1, capabilities: [], locale: 'it-IT', shows: ['image'] }));
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'fammi un grafico' }));
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver('voice:default', null, {
+      kind: 'chat',
+      content: { text: 'Ecco il grafico.', files: ['spese.png', 'dati.csv'] },
+      files: [
+        { filename: 'spese.png', data: png },
+        { filename: 'dati.csv', data: Buffer.from('mese,euro\n') },
+      ],
+      inReplyTo: h.inbound[0].id,
+    });
+    await until(() => received.some((m) => m.type === 'done'));
+    expect(received).toEqual([
+      { type: 'delta', reply_to: 'm1', text: 'Ecco il grafico.' },
+      {
+        type: 'file',
+        reply_to: 'm1',
+        name: 'spese.png',
+        size: png.length,
+        mime: 'image/png',
+        data: png.toString('base64'),
+      },
+      { type: 'file', reply_to: 'm1', name: 'dati.csv', size: 10, reason: 'type' },
+      { type: 'done', reply_to: 'm1' },
+    ]);
+  });
+
+  it('keeps a picture the agent sends on its own for the app while it is offline', async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0]);
+    const h = await start();
+    await h.adapter.deliver('voice:default', null, {
+      kind: 'chat',
+      content: { text: '', files: ['recap.jpg'] },
+      files: [{ filename: 'recap.jpg', data: jpeg }],
+    });
+    const { ws, received } = await connect(h);
+    ws.send(JSON.stringify({ type: 'hello', protocol: 1, capabilities: [], locale: 'it-IT', shows: ['image'] }));
+    await until(() => received.some((m) => m.type === 'file'));
+    expect(received.find((m) => m.type === 'file')).toEqual({
+      type: 'file',
+      name: 'recap.jpg',
+      size: 6,
+      mime: 'image/jpeg',
+      data: jpeg.toString('base64'),
+    });
+  });
+
+  it('sends a picture by name only when it is too big or the app cannot show it', () => {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(8)]);
+    expect(fileFrame({ filename: 'a.png', data: png }, false)).toEqual({
+      type: 'file',
+      name: 'a.png',
+      size: 16,
+      mime: 'image/png',
+      reason: 'app',
+    });
+    const big = Buffer.concat([png, Buffer.alloc(10 * 1024 * 1024)]);
+    expect(fileFrame({ filename: 'b.png', data: big }, true)).toMatchObject({ reason: 'size', mime: 'image/png' });
+    expect(fileFrame({ filename: 'b.png', data: big }, true)).not.toHaveProperty('data');
+    // the name is the file's own, without folders or control characters
+    expect(fileFrame({ filename: '../x/\u0007c.txt', data: Buffer.from('x') }, true)).toMatchObject({ name: 'c.txt' });
   });
 
   it('ties the reply and its action to the request when in_reply_to carries the agent group, as the router stores it', async () => {

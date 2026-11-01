@@ -331,6 +331,21 @@ for g in json.load(sys.stdin).get("data") or []:
   in_install "pnpm --silent exec tsx scripts/voice-setup.ts enable --bind $bind $target" || die "voice-setup enable failed"
   in_install "bash setup/lib/restart.sh >/dev/null" || die "NanoClaw did not restart"
   in_install "pnpm --silent exec tsx scripts/voice-setup.ts wire $target" || die "voice-setup wire failed"
+  # Charts: the agent sends pictures to the app, and draws charts with matplotlib, which the base image lacks.
+  if ask_no "Give the app's agent Python with matplotlib, to draw charts (its image grows by about 200 MB)?"; then
+    local id
+    id="$(ncl groups list --json | python3 -c '
+import json, sys
+folder = sys.argv[1]
+print(next((g["id"] for g in json.load(sys.stdin).get("data") or [] if g.get("folder") == folder), ""))' "${folder:-voice}")"
+    if [[ -n "$id" ]] && ncl groups config add-package --id "$id" --apt python3-matplotlib >/dev/null \
+      && ncl groups restart --id "$id" --rebuild >/dev/null; then
+      note "matplotlib added; the agent's image was rebuilt"
+    else
+      note "could not add matplotlib: later, as $NC_USER, 'ncl groups config add-package --id <group> --apt python3-matplotlib'"
+      note "then 'ncl groups restart --id <group> --rebuild'"
+    fi
+  fi
   note "Pair the phone: in the panel, page Phone, make a pairing QR and scan it in the app (Settings > Server)."
   mark voice
 }
