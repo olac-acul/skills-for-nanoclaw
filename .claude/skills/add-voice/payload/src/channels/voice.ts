@@ -1432,9 +1432,14 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
         }
       }
       // Working, or an action still out: the answer is still being prepared. Tell the app and keep the exchange open (up
-      // to a limit) so the answer arrives in the same reply instead of after a `done`.
+      // to a limit) so the answer arrives in the same reply instead of after a `done`. A picture before any words comes
+      // from `send_file` in the middle of the turn: its comment follows, in the same reply too, not as an alert.
       if (working) send(client, { type: 'working', reply_to: live.id });
-      scheduleDone(live, working || live.openActions > 0 ? workingTimeoutMs : refused ? followUpMs : doneDelayMs);
+      const pictureFirst = files.length > 0 && live.deltas === 0;
+      scheduleDone(
+        live,
+        working || live.openActions > 0 ? workingTimeoutMs : refused || pictureFirst ? followUpMs : doneDelayMs,
+      );
       return id;
     },
   };

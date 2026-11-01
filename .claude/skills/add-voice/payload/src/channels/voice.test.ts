@@ -305,6 +305,31 @@ describe('voice adapter', () => {
     ]);
   });
 
+  it('waits for the comment after a picture sent before any words, in the same reply', async () => {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16)]);
+    const h = await start({ followUpMs: 2000 });
+    const { ws, received } = await connect(h);
+    ws.send(JSON.stringify({ type: 'hello', protocol: 1, capabilities: [], locale: 'it-IT', shows: ['image'] }));
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'fammi un grafico' }));
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver('voice:default', null, {
+      kind: 'chat',
+      content: { text: '', files: ['spese.png'] },
+      files: [{ filename: 'spese.png', data: png }],
+      inReplyTo: h.inbound[0].id,
+    });
+    await until(() => received.some((m) => m.type === 'file'));
+    await new Promise((r) => setTimeout(r, 200)); // longer than doneDelayMs: the agent is still writing
+    await h.adapter.deliver('voice:default', null, {
+      kind: 'chat',
+      content: { text: 'Ecco il grafico.' },
+      inReplyTo: h.inbound[0].id,
+    });
+    await until(() => received.some((m) => m.type === 'done'));
+    expect(received.map((m) => m.type)).toEqual(['file', 'delta', 'done']);
+    expect(received[1]).toEqual({ type: 'delta', reply_to: 'm1', text: 'Ecco il grafico.' });
+  });
+
   it('keeps a picture the agent sends on its own for the app while it is offline', async () => {
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0]);
     const h = await start();
