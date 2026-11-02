@@ -11,11 +11,13 @@ import {
   actionResultText,
   fileFrame,
   canonicalPairingCode,
+  cleanAlertText,
   cleanDeviceName,
   createVoiceAdapter,
   forThisApp,
   hashPairingCode,
   idleResetMinutes,
+  isOwnAddress,
   isPrivateAddress,
   NO_CHOICES_TEXT,
   choiceProblem,
@@ -595,7 +597,9 @@ describe('voice adapter', () => {
     expect(received.slice(before).some((m) => m.type === 'notify')).toBe(false);
     expect(received.some((m) => m.type === 'conversation_reset')).toBe(false);
     // the app is told where the conversation started over: before the request that came after the pause
-    expect(received.filter((m) => m.type === 'context_restarted')).toEqual([{ type: 'context_restarted', reply_to: 'm3' }]);
+    expect(received.filter((m) => m.type === 'context_restarted')).toEqual([
+      { type: 'context_restarted', reply_to: 'm3' },
+    ]);
   });
 
   it('answers the request that replaced the one a pause reset was tied to', async () => {
@@ -740,7 +744,12 @@ describe('voice adapter', () => {
 
   it('tells the app connected when the pause runs out, once, and never with the pause turned off', async () => {
     let t = 1_000_000;
-    const on = await start({ idleResetMs: 60_000, now: () => t, staleAfterMs: 2_000, resetConversation: async () => 1 });
+    const on = await start({
+      idleResetMs: 60_000,
+      now: () => t,
+      staleAfterMs: 2_000,
+      resetConversation: async () => 1,
+    });
     const off = await start({ idleResetMs: 0, now: () => t, staleAfterMs: 2_000, resetConversation: async () => 1 });
     const clients: Array<{ ws: WebSocket; received: Msg[] }> = [];
     for (const h of [on, off]) {
@@ -772,10 +781,16 @@ describe('voice adapter', () => {
     const b = await connect(first);
     b.ws.send(hello());
     await until(() => b.received.some((m) => m.type === 'conversation_idle'));
-    expect(JSON.parse(fs.readFileSync(activityPath, 'utf8'))).toEqual({ last_message_at: 1_000_000, pause_announced: true });
+    expect(JSON.parse(fs.readFileSync(activityPath, 'utf8'))).toEqual({
+      last_message_at: 1_000_000,
+      pause_announced: true,
+    });
     t += 61_000;
     await first.adapter.deliver('voice:default', null, { kind: 'chat', content: { text: 'Promemoria.' } });
-    expect(JSON.parse(fs.readFileSync(activityPath, 'utf8'))).toEqual({ last_message_at: 1_181_000, pause_announced: true });
+    expect(JSON.parse(fs.readFileSync(activityPath, 'utf8'))).toEqual({
+      last_message_at: 1_181_000,
+      pause_announced: true,
+    });
     await first.adapter.teardown();
 
     t += 1_000; // the host restarted, right after the alert
@@ -880,7 +895,11 @@ describe('voice adapter', () => {
   });
 
   it('knows the limits of a choice in the app', () => {
-    const q = (question: string, labels: string[]) => ({ id: 'q', question, options: labels.map((label) => ({ label, value: label })) });
+    const q = (question: string, labels: string[]) => ({
+      id: 'q',
+      question,
+      options: labels.map((label) => ({ label, value: label })),
+    });
     expect(choiceProblem(q('Quale?', ['a', 'b']))).toBeNull();
     expect(choiceProblem(q('x'.repeat(201), ['a', 'b']))).toMatch(/200 caratteri/);
     expect(choiceProblem(q('Quale?', ['a']))).toMatch(/da 2 a 5/);
@@ -1618,5 +1637,113 @@ describe('pairing with a code', () => {
     expect(cleanDeviceName('')).toBeNull();
     expect(cleanDeviceName(5)).toBeNull();
     expect(cleanDeviceName('a'.repeat(100))).toHaveLength(40);
+  });
+});
+
+describe('local alerts (POST /notify)', () => {
+  let dir: string;
+  let tokenPath: string;
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  async function notifying(extra: Partial<Parameters<typeof createVoiceAdapter>[0]> = {}) {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-notify-'));
+    tokenPath = path.join(dir, 'voice-notify.token');
+    return start({ notifyTokenPath: tokenPath, ...extra });
+  }
+  const notify = (h: Harness, body: unknown, token: string | null) =>
+    new Promise<{ status: number; body: Record<string, unknown> | null }>((resolve, reject) => {
+      const data = typeof body === 'string' ? body : JSON.stringify(body);
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port: h.adapter.port(),
+          path: '/notify',
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+        },
+        (res) => {
+          let text = '';
+          res.on('data', (c) => (text += c));
+          res.on('end', () => {
+            let parsed: Record<string, unknown> | null = null;
+            try {
+              parsed = JSON.parse(text);
+            } catch {
+              parsed = null;
+            }
+            resolve({ status: res.statusCode ?? 0, body: parsed });
+          });
+        },
+      );
+      req.on('error', reject);
+      req.end(data);
+    });
+  const token = () => fs.readFileSync(tokenPath, 'utf8').trim();
+
+  it('makes its token once, readable only by this user, and keeps it across restarts', async () => {
+    await notifying();
+    const first = token();
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600);
+    await start({ notifyTokenPath: tokenPath });
+    expect(token()).toBe(first);
+  });
+
+  it('keeps an alert for an app that is offline and gives it at the next connection', async () => {
+    const h = await notifying();
+    const answer = await notify(
+      h,
+      { text: 'Telegram · Condominio\nMario: domani acqua chiusa', source: 'telegram' },
+      token(),
+    );
+    expect(answer).toEqual({ status: 202, body: { ok: true, delivered: 'kept' } });
+    const { ws, received } = await connect(h);
+    ws.send(hello());
+    await until(() => received.length > 0);
+    expect(received[0]).toEqual({ type: 'notify', text: 'Telegram · Condominio\nMario: domani acqua chiusa' });
+    expect(h.inbound).toEqual([]); // never to the agent
+  });
+
+  it('shows it at once to a connected app', async () => {
+    const h = await notifying();
+    const { ws, received } = await connect(h);
+    ws.send(hello());
+    await new Promise((r) => setTimeout(r, 30));
+    expect((await notify(h, { text: 'Ciao' }, token())).body).toEqual({ ok: true, delivered: 'shown' });
+    await until(() => received.some((m) => m.type === 'notify'));
+    expect(received.find((m) => m.type === 'notify')).toEqual({ type: 'notify', text: 'Ciao' });
+  });
+
+  it('refuses a wrong or missing token, an empty or too large body, and too many alerts', async () => {
+    const h = await notifying();
+    expect((await notify(h, { text: 'x' }, 'wrong'.repeat(13))).status).toBe(401);
+    expect((await notify(h, { text: 'x' }, null)).status).toBe(401);
+    expect((await notify(h, { text: '  ' }, token())).status).toBe(400);
+    expect((await notify(h, 'not json', token())).status).toBe(400);
+    expect((await notify(h, { text: 'y'.repeat(9000) }, token())).status).toBe(413);
+    for (let i = 0; i < 30; i++) expect((await notify(h, { text: `n${i}` }, token())).status).toBe(202);
+    expect((await notify(h, { text: 'one too many' }, token())).status).toBe(429);
+  });
+
+  it('does not exist when it is off', async () => {
+    const h = await start({ notifyTokenPath: null });
+    expect((await notify(h, { text: 'x' }, 'a'.repeat(64))).status).toBe(404);
+  });
+
+  it('only takes requests from this machine', () => {
+    expect(isOwnAddress('127.0.0.1')).toBe(true);
+    expect(isOwnAddress('::ffff:127.0.0.1')).toBe(true);
+    expect(isOwnAddress('::1')).toBe(true);
+    expect(isOwnAddress('203.0.113.7')).toBe(false);
+    expect(isOwnAddress(undefined)).toBe(false);
+    const own = Object.values(os.networkInterfaces())
+      .flatMap((list) => list ?? [])
+      .find((entry) => !entry['internal']);
+    if (own) expect(isOwnAddress(own.address)).toBe(true);
+  });
+
+  it('cleans the text', () => {
+    expect(cleanAlertText('a\r\nb\u0007c\u001b[31m')).toBe('a\nbc[31m');
+    expect(cleanAlertText('z'.repeat(2500))).toHaveLength(2000);
   });
 });

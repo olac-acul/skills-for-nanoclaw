@@ -9,6 +9,8 @@
  * Single-operator, single-chat: one adapter instance = one messaging group with
  * `platform_id = "default"` (override with VOICE_PLATFORM_ID). One app connection at a time.
  * Requires a bearer token. Self-registers on import; opens the socket only in setup().
+ * `POST /notify` (from this machine only, with its own token in data/voice-notify.token) lets a local service send the
+ * person an alert, kept and announced with a push while the phone is offline, like the agent's own alerts.
  *
  * Every message of the app opens an exchange. What the agent sends is matched to its exchange through the outbound
  * message's in_reply_to, never through "the latest message": a late answer, an interrupted request or a new question
@@ -16,11 +18,12 @@
  * phone tools (mcp-tools/phone.ts), and only for a live exchange; `[[action:...]]` or `[[working]]` written in text is
  * stripped, never run. The phone's `action_result` goes back to the agent as data of that exchange, quoted.
  */
-import { createHash, timingSafeEqual } from 'crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import { lookup } from 'dns/promises';
 import fs from 'fs';
 import http from 'http';
 import { isIP, type AddressInfo } from 'net';
+import os from 'os';
 import path from 'path';
 import { WebSocket, WebSocketServer } from 'ws';
 
@@ -81,6 +84,10 @@ const PAIR_MAX_BODY_BYTES = 1024;
 const PAIR_MAX_ATTEMPTS = 5;
 /** 16 characters of Crockford base32 (no I, L, O, U): 80 random bits. */
 const PAIR_CODE = /^[0-9A-HJKMNP-TV-Z]{16}$/;
+/** `POST /notify`: the body, the alert's text, and how many alerts a minute a local service may send. */
+const NOTIFY_MAX_BODY_BYTES = 8 * 1024;
+const NOTIFY_MAX_TEXT = 2000;
+const NOTIFY_PER_MINUTE = 30;
 const FAILED_LOGIN_WINDOW_MS = 10 * 60_000;
 /** How often, at most, the time of the last message is written to disk. */
 const ACTIVITY_SAVE_EVERY_MS = 60_000;
@@ -149,6 +156,12 @@ export interface VoiceAdapterOptions {
   idleResetMs?: number;
   /** Where the time of the last message is remembered across restarts; null keeps it in memory only. */
   activityPath?: string | null;
+  /**
+   * Where the token of `POST /notify` is kept (created at setup when missing, mode 0600). With it, a service on this
+   * same machine (a broker watching chats or a mailbox) sends the person an alert, the way the agent's own alerts
+   * arrive: never to the agent. Only from this machine's own addresses. null turns `/notify` off.
+   */
+  notifyTokenPath?: string | null;
   /** The clock for the pause above. Tests replace it. */
   now?: () => number;
 }
@@ -271,7 +284,12 @@ export function actionResultText(actionId: string, ok: boolean, detail: unknown)
 export function fileFrame(file: OutboundFile, showsImages: boolean, replyTo?: string): Record<string, unknown> {
   const name = (file.filename.split(/[\\/]/).pop() ?? '').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 120) || 'file';
   const mime = Object.keys(IMAGE_TYPES).find((type) => IMAGE_TYPES[type].magic(file.data));
-  const frame: Record<string, unknown> = { type: 'file', ...(replyTo ? { reply_to: replyTo } : {}), name, size: file.data.length };
+  const frame: Record<string, unknown> = {
+    type: 'file',
+    ...(replyTo ? { reply_to: replyTo } : {}),
+    name,
+    size: file.data.length,
+  };
   if (!mime) return { ...frame, reason: 'type' };
   if (file.data.length > MAX_OUT_IMAGE_BYTES) return { ...frame, mime, reason: 'size' };
   if (!showsImages) return { ...frame, mime, reason: 'app' };
@@ -375,6 +393,24 @@ export function parseImage(raw: unknown): VoiceImage | string | undefined {
   if (bytes.length === 0 || bytes.length > MAX_IMAGE_BYTES) return `image must be at most ${MAX_IMAGE_BYTES} bytes`;
   if (!type.magic(bytes)) return 'image data does not match its type';
   return { mimeType: mime as string, name: `photo.${type.ext}`, size: bytes.length, data };
+}
+
+/** Whether a request comes from this machine itself (loopback or one of its own addresses), not from the LAN. */
+export function isOwnAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  const plain = address.replace(/^::ffff:/, '');
+  if (plain === '::1' || plain.startsWith('127.')) return true;
+  return Object.values(os.networkInterfaces()).some((list) => (list ?? []).some((i) => i.address === plain));
+}
+
+/** An alert's text from a local service: control characters out (new lines kept), at most NOTIFY_MAX_TEXT. */
+export function cleanAlertText(raw: string): string {
+  const text = raw
+    .replace(/\r\n?/g, '\n')
+    // eslint-disable-next-line no-control-regex -- removing control characters is the point
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, '')
+    .trim();
+  return text.length <= NOTIFY_MAX_TEXT ? text : `${text.slice(0, NOTIFY_MAX_TEXT - 1).trimEnd()}…`;
 }
 
 function tokenMatches(header: string | undefined, token: string): boolean {
@@ -566,6 +602,8 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
 
   let server: http.Server | null = null;
   let wss: WebSocketServer | null = null;
+  let notifyToken: string | null = null;
+  const notifyTimes: number[] = [];
   let setupConfig: ChannelSetup | null = null;
   let pingTimer: NodeJS.Timeout | null = null;
   let livenessTimer: NodeJS.Timeout | null = null;
@@ -945,7 +983,10 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
         // The request that replaces it may already be here (a cancel can follow its message): one that came after it.
         if (pauseClear?.exchangeId === ex.id) {
           const all = [...exchanges.values()];
-          const next = all.slice(all.indexOf(ex) + 1).filter((e) => !e.closed && !e.cancelled).pop();
+          const next = all
+            .slice(all.indexOf(ex) + 1)
+            .filter((e) => !e.closed && !e.cancelled)
+            .pop();
           if (next) rebindPauseClear(next.id);
         }
       }
@@ -1057,6 +1098,94 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
     } catch {
       return null;
     }
+  }
+
+  /** An alert for the person: shown now when the app is connected, otherwise kept and announced with a wake-up push. */
+  function alert(text: string): 'shown' | 'kept' {
+    if (client && client.readyState === WebSocket.OPEN && capabilities) {
+      send(client, { type: 'notify', text });
+      return 'shown';
+    }
+    pendingNotify.push(text);
+    while (pendingNotify.length > PENDING_NOTIFY_MAX) pendingNotify.shift();
+    void wakePhone();
+    return 'kept';
+  }
+
+  /** The token of `POST /notify`, made the first time (32 random bytes, a 0600 file only this user reads). */
+  function loadNotifyToken(): string | null {
+    if (!opts.notifyTokenPath) return null;
+    try {
+      const existing = fs.readFileSync(opts.notifyTokenPath, 'utf8').trim();
+      if (existing.length >= MIN_TOKEN_LENGTH) return existing;
+    } catch {
+      // not there yet: made below
+    }
+    try {
+      const token = randomBytes(32).toString('hex');
+      fs.mkdirSync(path.dirname(opts.notifyTokenPath), { recursive: true });
+      fs.writeFileSync(opts.notifyTokenPath, `${token}\n`, { mode: 0o600 });
+      fs.chmodSync(opts.notifyTokenPath, 0o600); // mode only applies when the file is created
+      return token;
+    } catch (err) {
+      log.warn('Voice could not write the notify token; local alerts are off', { err: String(err) });
+      return null;
+    }
+  }
+
+  /**
+   * `POST /notify` from a service on this machine: `{"text": "...", "source": "..."}` becomes an alert in the app. From
+   * anywhere else, or with /notify off, it does not exist.
+   */
+  function handleNotify(req: http.IncomingMessage, res: http.ServerResponse): void {
+    if (!notifyToken || !isOwnAddress(req.socket.remoteAddress)) {
+      req.resume();
+      return replyJson(res, 404, { error: 'not_found' });
+    }
+    if (!tokenMatches(req.headers['authorization'], notifyToken)) {
+      req.resume();
+      return replyJson(res, 401, { error: 'unauthorized' });
+    }
+    const now = Date.now();
+    while (notifyTimes.length && now - notifyTimes[0] > 60_000) notifyTimes.shift();
+    if (notifyTimes.length >= NOTIFY_PER_MINUTE) {
+      req.resume();
+      return replyJson(res, 429, { error: 'too_many_alerts' });
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const timer = setTimeout(() => req.destroy(), 5000);
+    timer.unref();
+    req.on('error', () => clearTimeout(timer));
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > NOTIFY_MAX_BODY_BYTES) {
+        clearTimeout(timer);
+        if (!res.headersSent) {
+          res.once('finish', () => req.socket.destroy());
+          res.writeHead(413, { 'content-type': 'application/json', 'cache-control': 'no-store', connection: 'close' });
+          res.end(JSON.stringify({ error: 'too_large' }));
+        }
+      } else chunks.push(chunk);
+    });
+    req.on('end', () => {
+      clearTimeout(timer);
+      if (res.headersSent) return;
+      let text = '';
+      let source = 'local';
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+        if (typeof body.text === 'string') text = cleanAlertText(body.text);
+        if (typeof body.source === 'string' && /^[a-z0-9_-]{1,32}$/.test(body.source)) source = body.source;
+      } catch {
+        // answered below
+      }
+      if (!text) return replyJson(res, 400, { error: 'bad_request' });
+      notifyTimes.push(now);
+      const delivered = alert(text);
+      log.info('Voice local alert', { source, delivered, chars: text.length });
+      replyJson(res, 202, { ok: true, delivered });
+    });
   }
 
   function dropPairing(): void {
@@ -1240,8 +1369,10 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
 
     async setup(config: ChannelSetup): Promise<void> {
       setupConfig = config;
+      notifyToken = loadNotifyToken();
       server = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/pair' && opts.pairingPath) return handlePair(req, res);
+        if (req.method === 'POST' && req.url === '/notify') return handleNotify(req, res);
         res.writeHead(404).end();
       });
       wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
@@ -1380,15 +1511,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
         // notification (kept while the phone is offline); an action is not sent, since nobody asked for it now. A
         // "working" line ("Cerco sul Web...") or a tool's lead line says what is being done for a request: without one
         // it would only be a stray notification, or a push that wakes the phone for nothing.
-        if (text && !working && !action) {
-          if (client && client.readyState === WebSocket.OPEN && capabilities) {
-            send(client, { type: 'notify', text });
-          } else {
-            pendingNotify.push(text);
-            while (pendingNotify.length > PENDING_NOTIFY_MAX) pendingNotify.shift();
-            void wakePhone();
-          }
-        }
+        if (text && !working && !action) alert(text);
         // A file sent on its own (a chart with a scheduled recap) goes to the chat, kept while the phone is offline.
         for (const file of files) {
           if (client && client.readyState === WebSocket.OPEN && capabilities) {
@@ -1488,6 +1611,7 @@ registerChannelAdapter('voice', {
       pairingPath: path.join(DATA_DIR, 'voice-pairing.json'),
       idleResetMs: idleResetMinutes(get('VOICE_IDLE_RESET_MINUTES')) * 60_000,
       activityPath: path.join(DATA_DIR, 'voice-activity.json'),
+      notifyTokenPath: path.join(DATA_DIR, 'voice-notify.token'),
     });
   },
   defaults: VOICE_DEFAULTS,
