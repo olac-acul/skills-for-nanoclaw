@@ -549,6 +549,23 @@ describe('voice adapter', () => {
     expect(received.filter((m) => m.type === 'notify')).toEqual([{ type: 'notify', text: 'Session cleared.' }]);
   });
 
+  it('drops the answer to a request abandoned by a new conversation instead of making it an alert', async () => {
+    const h = await start({ resetConversation: async () => 1 });
+    const { ws, received } = await connect(h);
+    ws.send(hello());
+    ws.send(JSON.stringify({ type: 'message', session: 's', id: 'm1', text: 'cerca i voli per Lisbona' }));
+    await until(() => h.inbound.length === 1);
+    ws.send(JSON.stringify({ type: 'new_conversation' }));
+    await until(() => received.some((m) => m.type === 'conversation_reset'));
+    await h.adapter.deliver('voice:default', null, {
+      kind: 'chat',
+      content: { text: 'Ecco i voli per Lisbona.' },
+      inReplyTo: h.inbound[0].id,
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(received.filter((m) => m.type === 'notify' || m.type === 'delta')).toEqual([]);
+  });
+
   it('starts a new conversation by itself before a message that comes after a long pause', async () => {
     let t = 1_000_000;
     const events: string[] = [];
@@ -1590,6 +1607,13 @@ describe('pairing with a code', () => {
     expect((await post(h, { code: CODE })).status).toBe(401);
   });
 
+  it('pairs even after many tries of the old token from the same phone (a rotated token)', async () => {
+    const h = await pairing();
+    for (let i = 0; i < 12; i++) await expect(connect(h, 'w'.repeat(48))).rejects.toThrow('HTTP 401');
+    leave();
+    expect((await post(h, { code: CODE })).status).toBe(200);
+  });
+
   it('refuses an address that keeps trying, like a wrong token', async () => {
     const h = await pairing();
     for (let i = 0; i < 10; i++) {
@@ -1745,5 +1769,64 @@ describe('local alerts (POST /notify)', () => {
   it('cleans the text', () => {
     expect(cleanAlertText('a\r\nb\u0007c\u001b[31m')).toBe('a\nbc[31m');
     expect(cleanAlertText('z'.repeat(2500))).toHaveLength(2000);
+  });
+});
+
+describe('the offline queue across restarts of the host', () => {
+  let dir: string;
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('keeps alerts and files for the phone in a private file and gives them at the next connection', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-pending-'));
+    const pendingPath = path.join(dir, 'voice-pending.json');
+    const first = await start({ pendingPath });
+    await first.adapter.deliver('voice:default', null, { kind: 'chat', content: { text: 'Promemoria delle 7' } });
+    const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+    await first.adapter.deliver('voice:default', null, {
+      kind: 'chat',
+      content: { text: '' },
+      files: [{ filename: 'grafico.png', data: png }],
+    });
+    expect(fs.statSync(pendingPath).mode & 0o777).toBe(0o600);
+    await first.adapter.teardown(); // the host restarts
+
+    const second = await start({ pendingPath });
+    const { ws, received } = await connect(second);
+    ws.send(JSON.stringify({ type: 'hello', protocol: 1, capabilities: [], locale: 'it-IT', shows: ['image'] }));
+    await until(() => received.length >= 2);
+    expect(received[0]).toEqual({ type: 'notify', text: 'Promemoria delle 7' });
+    expect(received[1]).toMatchObject({
+      type: 'file',
+      name: 'grafico.png',
+      mime: 'image/png',
+      data: png.toString('base64'),
+    });
+    expect(fs.existsSync(pendingPath)).toBe(false); // delivered: nothing left to keep
+  });
+
+  it('gives a kept picture by name to an app that does not show pictures, and ignores a damaged file', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-pending-'));
+    const pendingPath = path.join(dir, 'voice-pending.json');
+    fs.writeFileSync(
+      pendingPath,
+      JSON.stringify({
+        notify: ['ok', 3],
+        files: [{ type: 'file', name: 'a.png', size: 4, mime: 'image/png', data: 'AAAA' }, 'x'],
+      }),
+    );
+    const h = await start({ pendingPath });
+    const { ws, received } = await connect(h);
+    ws.send(hello());
+    await until(() => received.length >= 2);
+    expect(received).toEqual([
+      { type: 'notify', text: 'ok' },
+      { type: 'file', name: 'a.png', size: 4, mime: 'image/png', reason: 'app' },
+    ]);
+    fs.writeFileSync(pendingPath, '{ not json');
+    const broken = await start({ pendingPath });
+    const other = await connect(broken);
+    other.ws.send(hello());
+    await new Promise((r) => setTimeout(r, 40));
+    expect(other.received.filter((m) => m.type === 'notify' || m.type === 'file')).toEqual([]);
   });
 });

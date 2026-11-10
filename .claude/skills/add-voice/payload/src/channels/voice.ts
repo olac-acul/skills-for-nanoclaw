@@ -157,6 +157,11 @@ export interface VoiceAdapterOptions {
   /** Where the time of the last message is remembered across restarts; null keeps it in memory only. */
   activityPath?: string | null;
   /**
+   * Where what waits for the phone while it is offline (alerts, files) is kept across restarts of the host, mode 0600;
+   * null keeps it in memory only. The core takes a message as delivered once it is queued here.
+   */
+  pendingPath?: string | null;
+  /**
    * Where the token of `POST /notify` is kept (created at setup when missing, mode 0600). With it, a service on this
    * same machine (a broker watching chats or a mailbox) sends the person an alert, the way the agent's own alerts
    * arrive: never to the agent. Only from this machine's own addresses. null turns `/notify` off.
@@ -282,6 +287,7 @@ export function actionResultText(actionId: string, ok: boolean, detail: unknown)
  * only, with the reason, so the app can say it came instead of the file vanishing.
  */
 export function fileFrame(file: OutboundFile, showsImages: boolean, replyTo?: string): Record<string, unknown> {
+  // eslint-disable-next-line no-control-regex -- removing control characters is the point
   const name = (file.filename.split(/[\\/]/).pop() ?? '').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 120) || 'file';
   const mime = Object.keys(IMAGE_TYPES).find((type) => IMAGE_TYPES[type].magic(file.data));
   const frame: Record<string, unknown> = {
@@ -629,16 +635,17 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
   const actionExchange = new Map<string, string>();
   /** Action id of a `choose` -> the ask_user_question it shows, still waiting for its answer. */
   const questionActions = new Map<string, VoiceQuestion>();
-  const pendingNotify: string[] = [];
+  const stored = loadPending();
+  const pendingNotify: string[] = stored.notify;
   /** Files the agent sent on its own while the app was offline, as they came: the frame is made on delivery. */
-  const pendingFiles: OutboundFile[] = [];
+  const pendingFiles: Record<string, unknown>[] = stored.files;
   let clearsPending = 0; // "Session cleared." replies still to swallow
   /**
    * Ids of `/clear` rows written for the app's "new conversation" and not yet tied to a request. When the container is
    * not running, the `/clear` and the next message reach the runner together, and it routes the answer by the first row,
    * the `/clear`: tied to that next request, the answer goes back into it instead of arriving as a notification.
    */
-  let unboundClears: string[] = [];
+  const unboundClears: string[] = [];
   /**
    * The `/clear` written after a pause and the request it is tied to, until an answer comes through it. The request may
    * be replaced before the runner answers (a sentence cut short and said again while the container starts): the batch's
@@ -653,7 +660,13 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
   // The runner sometimes hands over the same final text twice (once for the request, once more after an action
   // result): the phone would show it twice. The last text sent and when, to drop an identical one right after.
   let lastText: { text: string; at: number; exchange: string | null } | null = null;
+  /** Wrong tokens on the WebSocket, by address (logged; the right token always gets in). */
   const failedLogins = new Map<string, { count: number; since: number }>();
+  /**
+   * Wrong pairing codes, by address, counted apart: an app still trying the old token after a rotation must not lock its
+   * own pairing with the new QR code out.
+   */
+  const failedPairs = new Map<string, { count: number; since: number }>();
 
   // UnifiedPush: while the phone is offline the server pokes this endpoint. The push carries NO content (the text would
   // travel through a third-party push server): it only makes the app wake up and fetch the buffered messages from here.
@@ -780,6 +793,43 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
     }
   }
 
+  /** What was waiting for the phone when the host stopped: alerts and file frames; nothing when unreadable. */
+  function loadPending(): { notify: string[]; files: Record<string, unknown>[] } {
+    if (!opts.pendingPath) return { notify: [], files: [] };
+    try {
+      const parsed = JSON.parse(fs.readFileSync(opts.pendingPath, 'utf8')) as { notify?: unknown; files?: unknown };
+      const notify = Array.isArray(parsed.notify)
+        ? parsed.notify.filter((t): t is string => typeof t === 'string')
+        : [];
+      const files = Array.isArray(parsed.files)
+        ? parsed.files.filter(
+            (f): f is Record<string, unknown> =>
+              !!f && typeof f === 'object' && !Array.isArray(f) && (f as { type?: unknown }).type === 'file',
+          )
+        : [];
+      return { notify: notify.slice(-PENDING_NOTIFY_MAX), files: files.slice(-PENDING_FILES_MAX) };
+    } catch {
+      return { notify: [], files: [] };
+    }
+  }
+
+  /** Written at each change (atomically, 0600): a restart of the host keeps what the phone has not received yet. */
+  function savePending(): void {
+    if (!opts.pendingPath) return;
+    try {
+      if (pendingNotify.length === 0 && pendingFiles.length === 0) {
+        fs.rmSync(opts.pendingPath, { force: true });
+        return;
+      }
+      fs.mkdirSync(path.dirname(opts.pendingPath), { recursive: true });
+      const temp = `${opts.pendingPath}.${process.pid}.tmp`;
+      fs.writeFileSync(temp, JSON.stringify({ notify: pendingNotify, files: pendingFiles }), { mode: 0o600 });
+      fs.renameSync(temp, opts.pendingPath);
+    } catch (err) {
+      log.warn('Voice could not keep the offline queue on disk', { err: String(err) });
+    }
+  }
+
   async function wakePhone(): Promise<void> {
     if (!pushEndpoint) return;
     const now = Date.now();
@@ -899,6 +949,18 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
     actionExchange.clear();
   }
 
+  /**
+   * A new conversation: the requests still being answered are dropped, and their answers too when they come (the app has
+   * cleared its screen). Forgotten instead, an answer would arrive with no request and become an alert.
+   */
+  function dropAll(): void {
+    for (const ex of exchanges.values()) {
+      closeExchange(ex, false);
+      ex.cancelled = true;
+    }
+    actionExchange.clear();
+  }
+
   function handleMessage(ws: WebSocket, data: unknown): void {
     let msg: Record<string, unknown>;
     try {
@@ -926,8 +988,15 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       connectedAt = new Date().toISOString();
       log.info('Voice client connected', { capabilities: [...capabilities], locale: clientLocale });
       writeStatus(true);
-      for (const text of pendingNotify.splice(0)) send(ws, { type: 'notify', text });
-      for (const file of pendingFiles.splice(0)) send(ws, fileFrame(file, showsImages));
+      if (pendingNotify.length || pendingFiles.length) {
+        for (const text of pendingNotify.splice(0)) send(ws, { type: 'notify', text });
+        // Kept as the frame for an app that shows pictures; without the picture for one that does not.
+        for (const frame of pendingFiles.splice(0)) {
+          const { data, ...rest } = frame;
+          send(ws, showsImages || data === undefined ? frame : { ...rest, reason: 'app' });
+        }
+        savePending();
+      }
       announcePause();
       return;
     }
@@ -1045,7 +1114,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
 
     if (msg.type === 'new_conversation') {
       // Whatever was being answered is dropped: the app has already cleared its screen.
-      closeAll();
+      dropAll();
       forgetPause();
       const clearId = `voice-clear-${clock().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
       unboundClears.push(clearId); // two taps in a row: both /clear rows may lead the next batch
@@ -1107,7 +1176,11 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       return 'shown';
     }
     pendingNotify.push(text);
-    while (pendingNotify.length > PENDING_NOTIFY_MAX) pendingNotify.shift();
+    if (pendingNotify.length > PENDING_NOTIFY_MAX) {
+      log.warn('Voice offline queue full: the oldest alert is dropped', { kept: PENDING_NOTIFY_MAX });
+      while (pendingNotify.length > PENDING_NOTIFY_MAX) pendingNotify.shift();
+    }
+    savePending();
     void wakePhone();
     return 'kept';
   }
@@ -1201,7 +1274,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
   /** `POST /pair`: the app trades a pairing code for the token. Every refusal looks the same from outside. */
   function handlePair(req: http.IncomingMessage, res: http.ServerResponse): void {
     const address = req.socket.remoteAddress ?? 'unknown';
-    if (loginRefused(address)) return replyJson(res, 429, { error: 'too_many_attempts' });
+    if (loginRefused(address, failedPairs)) return replyJson(res, 429, { error: 'too_many_attempts' });
     const chunks: Buffer[] = [];
     let size = 0;
     const timer = setTimeout(() => req.destroy(), 5000);
@@ -1233,7 +1306,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       if (typeof body.code !== 'string' || body.code.length > 64) return replyJson(res, 400, { error: 'bad_request' });
 
       const refuse = (): void => {
-        noteFailedLogin(address);
+        noteFailedLogin(address, failedPairs);
         replyJson(res, 401, { error: 'invalid_code' });
       };
       const pending = readPairing();
@@ -1267,6 +1340,7 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
       }
       // Used once: the code is gone before the answer is sent.
       dropPairing();
+      failedPairs.delete(address);
       failedLogins.delete(address);
       pairedAt = new Date().toISOString();
       pairedDevice = cleanDeviceName(body.device);
@@ -1339,21 +1413,24 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
     ws.on('error', (err) => log.warn('Voice socket error', { err }));
   }
 
-  /** A wrong token: logged, and an address that keeps trying is refused for a while. */
-  function loginRefused(address: string): boolean {
+  /** A wrong token or code: logged, and an address that keeps trying is refused for a while. */
+  function loginRefused(address: string, tries = failedLogins): boolean {
     const now = Date.now();
-    const entry = failedLogins.get(address);
-    if (entry && now - entry.since > FAILED_LOGIN_WINDOW_MS) failedLogins.delete(address);
-    return (failedLogins.get(address)?.count ?? 0) >= MAX_FAILED_LOGINS;
+    const entry = tries.get(address);
+    if (entry && now - entry.since > FAILED_LOGIN_WINDOW_MS) tries.delete(address);
+    return (tries.get(address)?.count ?? 0) >= MAX_FAILED_LOGINS;
   }
 
-  function noteFailedLogin(address: string): void {
+  function noteFailedLogin(address: string, tries = failedLogins): void {
     const now = Date.now();
-    const entry = failedLogins.get(address) ?? { count: 0, since: now };
+    const entry = tries.get(address) ?? { count: 0, since: now };
     entry.count++;
-    remember(failedLogins, address, entry);
+    remember(tries, address, entry);
     if (entry.count === 1 || entry.count === MAX_FAILED_LOGINS) {
-      log.warn('Voice login refused: wrong token', { address, attempts: entry.count });
+      log.warn(tries === failedPairs ? 'Voice pairing refused: wrong code' : 'Voice login refused: wrong token', {
+        address,
+        attempts: entry.count,
+      });
     }
   }
 
@@ -1517,8 +1594,9 @@ export function createVoiceAdapter(opts: VoiceAdapterOptions): VoiceAdapter {
           if (client && client.readyState === WebSocket.OPEN && capabilities) {
             send(client, fileFrame(file, showsImages));
           } else {
-            pendingFiles.push(file);
+            pendingFiles.push(fileFrame(file, true));
             while (pendingFiles.length > PENDING_FILES_MAX) pendingFiles.shift();
+            savePending();
             void wakePhone();
           }
         }
@@ -1611,6 +1689,7 @@ registerChannelAdapter('voice', {
       pairingPath: path.join(DATA_DIR, 'voice-pairing.json'),
       idleResetMs: idleResetMinutes(get('VOICE_IDLE_RESET_MINUTES')) * 60_000,
       activityPath: path.join(DATA_DIR, 'voice-activity.json'),
+      pendingPath: path.join(DATA_DIR, 'voice-pending.json'),
       notifyTokenPath: path.join(DATA_DIR, 'voice-notify.token'),
     });
   },

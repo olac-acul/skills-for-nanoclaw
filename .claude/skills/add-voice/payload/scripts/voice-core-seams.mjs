@@ -15,7 +15,11 @@
  *                   channels (`voice-instructions-filter.ts`). Optional, like the next one: only with OpenCode;
  *   summaries       when OpenCode summarizes a long conversation (auto-compaction), the voice app is told, the way
  *                   voice_working does (`voice-compaction.ts`). Optional: only where the OpenCode provider is
- *                   installed; skipped, not an error, without it.
+ *                   installed; skipped, not an error, without it;
+ *   newest request  when the runner reads several voice requests together (the container was starting, the agent
+ *                   was busy), its one answer is tied to the newest of them: the app waits for that one and drops what
+ *                   belongs to an older request it interrupted. Routed by the first row, as for other channels, the
+ *                   answer went to the interrupted request and was dropped, and the newest one never got its answer.
  *
  * This script applies them as exact, anchored edits. It is built to fail loudly rather than guess:
  *
@@ -35,6 +39,19 @@ import { fileURLToPath } from 'node:url';
 /** Each edit: `anchor` (exact text, once in the file), `replace` (the text that takes its place) and `marker`
  *  (text that is present only once the edit is applied). A file marked `optional` is left alone when it is absent. */
 export const SEAMS = [
+  {
+    file: 'container/agent-runner/src/formatter.ts',
+    edits: [
+      {
+        name: 'voice: a batch answers its newest request',
+        anchor: '    inReplyTo: first?.id ?? null,\n',
+        replace:
+          '    // Voice (add-voice seam): the app waits for the newest request of a batch; an older one was interrupted.\n' +
+          "    inReplyTo: (first?.channel_type === 'voice' ? [...waking].reverse().find((m) => !isFailureNotice(m)) ?? first : first)?.id ?? null,\n",
+        marker: "first?.channel_type === 'voice' ? [...waking].reverse()",
+      },
+    ],
+  },
   {
     file: 'container/agent-runner/src/poll-loop.ts',
     edits: [
