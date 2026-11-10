@@ -17,6 +17,7 @@
  * `enable` when it makes a new one.
  */
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -73,6 +74,40 @@ function writePrivate(file: string, text: string): void {
   fs.renameSync(temp, file);
 }
 
+/**
+ * A group's instructions file: its text, '' when there is none, null when it is a symlink or not a plain file. The
+ * agent can write in its group folder, and a symlink put there would make this host-side script copy a host file (the
+ * .env with its tokens) into the agent's folder, or write over one: such a file is left alone.
+ */
+function readGroupFile(file: string): string | null {
+  let fd: number;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? '' : null;
+  }
+  try {
+    return fs.fstatSync(fd).isFile() ? fs.readFileSync(fd, 'utf8') : null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Written to a new file with a random name and renamed over `file`: a symlink there is replaced, never followed. */
+function writeGroupFile(file: string, text: string): void {
+  const temp = path.join(path.dirname(file), `.voice-${randomBytes(8).toString('hex')}.tmp`);
+  fs.writeFileSync(temp, text, { flag: 'wx', mode: 0o644 }); // O_CREAT|O_EXCL: never an existing file or symlink
+  try {
+    fs.renameSync(temp, file);
+  } catch (err) {
+    fs.rmSync(temp, { force: true });
+    throw err;
+  }
+}
+
+const notPlain = (folder: string): string =>
+  `groups/${folder}/instructions.prepend.md is a symlink or not a plain file: not touched (fix it by hand)`;
+
 function groupFolders(): string[] {
   const dir = path.join(root, 'groups');
   if (!fs.existsSync(dir)) return [];
@@ -105,11 +140,12 @@ function mergeInstructions(folder: string): string {
   const dir = path.join(root, 'groups', folder);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'instructions.prepend.md');
-  const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const existing = readGroupFile(file);
+  if (existing === null) fail(notPlain(folder));
   const merged = mergeSection(existing, fs.readFileSync(sectionFile, 'utf8'));
   if (merged === existing) return 'already up to date';
-  if (existing !== '') fs.copyFileSync(file, `${file}.before-voice`);
-  fs.writeFileSync(file, merged);
+  if (existing !== '') writeGroupFile(`${file}.before-voice`, existing);
+  writeGroupFile(file, merged);
   return existing === '' ? 'written' : `updated (the previous file is kept as ${path.basename(file)}.before-voice)`;
 }
 
@@ -235,9 +271,9 @@ function status(): void {
   console.log(`listening on: ${settings.host}:${settings.port}`);
   console.log(`token set: ${settings.hasToken}`);
   for (const folder of groupFolders()) {
-    const file = path.join(root, 'groups', folder, 'instructions.prepend.md');
-    if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes(SECTION_BEGIN.slice(0, 20)))
-      console.log(`voice instructions in: groups/${folder}`);
+    const text = readGroupFile(path.join(root, 'groups', folder, 'instructions.prepend.md'));
+    if (text === null) console.log(notPlain(folder));
+    else if (text.includes(SECTION_BEGIN.slice(0, 20))) console.log(`voice instructions in: groups/${folder}`);
   }
 }
 
@@ -247,11 +283,15 @@ function disable(): void {
   if (updated !== env) writePrivate(envFile, updated);
   for (const folder of groupFolders()) {
     const file = path.join(root, 'groups', folder, 'instructions.prepend.md');
-    if (!fs.existsSync(file)) continue;
-    const text = fs.readFileSync(file, 'utf8');
+    const text = readGroupFile(file);
+    if (text === null) {
+      console.log(notPlain(folder));
+      continue;
+    }
+    if (text === '') continue;
     const removed = removeSection(text);
     if (removed !== text) {
-      fs.writeFileSync(file, removed);
+      writeGroupFile(file, removed);
       console.log(`voice instructions removed from groups/${folder}`);
     }
   }
