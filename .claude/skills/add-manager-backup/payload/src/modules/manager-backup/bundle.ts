@@ -200,7 +200,8 @@ async function workDir(kind: 'create' | 'verify'): Promise<string> {
     if (!match || pidAlive(Number(match[1]))) continue;
     const full = path.join(base, name);
     const stat = await fs.promises.lstat(full).catch(() => null);
-    if (stat?.isDirectory() && stat.uid === process.getuid?.()) await fs.promises.rm(full, { recursive: true, force: true });
+    if (stat?.isDirectory() && stat.uid === process.getuid?.())
+      await fs.promises.rm(full, { recursive: true, force: true });
   }
   return fs.promises.mkdtemp(path.join(base, `manager-backup-${kind}-${process.pid}-`));
 }

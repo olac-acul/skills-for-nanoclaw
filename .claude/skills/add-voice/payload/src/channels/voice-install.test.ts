@@ -113,7 +113,8 @@ describe('addresses', () => {
     expect('problem' in pairingAddress({ enabled: true, host: '0.0.0.0', port: 8767, hasToken: true })).toBe(true);
   });
   it('checks a bind address', () => {
-    for (const ok of ['100.101.102.109', 'fd7a::1', 'phone-server', 'a.b.test']) expect(validBindHost(ok), ok).toBe(true);
+    for (const ok of ['100.101.102.109', 'fd7a::1', 'phone-server', 'a.b.test'])
+      expect(validBindHost(ok), ok).toBe(true);
     for (const bad of ['', '999.1.1.1', 'a b', 'x;rm', '-bad']) expect(validBindHost(bad), bad).toBe(false);
   });
 });

@@ -142,7 +142,13 @@ export function clientKey(address: string | undefined): string {
   const raw = (address ?? 'unknown').toLowerCase().split('%')[0];
   const groups = raw.includes(':') ? ipv6Groups(raw) : null;
   if (!groups) return raw;
-  return mappedIpv4(groups) ?? `${groups.slice(0, 4).map((n) => n.toString(16)).join(':')}::/64`;
+  return (
+    mappedIpv4(groups) ??
+    `${groups
+      .slice(0, 4)
+      .map((n) => n.toString(16))
+      .join(':')}::/64`
+  );
 }
 
 interface ClientRecord {
