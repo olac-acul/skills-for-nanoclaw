@@ -26,11 +26,16 @@ container/agent-runner/src/voice-instructions-filter.ts
 scripts/tsconfig.voice-setup.json
 scripts/voice-core-seams.mjs
 scripts/voice-setup.ts
+src/channels/voice-frames.ts
 src/channels/voice-install.test.ts
 src/channels/voice-install.ts
 src/channels/voice-instructions.md
+src/channels/voice-net.ts
 src/channels/voice-registration.test.ts
 src/channels/voice-reset.test.ts
+src/channels/voice-sessions.ts
+src/channels/voice-store.test.ts
+src/channels/voice-store.ts
 src/channels/voice.test.ts
 src/channels/voice.ts
 ```

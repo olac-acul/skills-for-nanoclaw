@@ -9,7 +9,7 @@ Adds a native WebSocket channel for the [NanoVoice](https://github.com/olac-acul
 
 What it adds:
 
-- **The channel** (`src/channels/voice.ts`): replies, actions, "working" and "done" tied to the app request they belong to; a single checked photo per message; wake-up push through UnifiedPush for a phone that is off; "new conversation" and "warm-up" frames.
+- **The channel** (`src/channels/voice.ts`, with its parts `voice-frames.ts` for the protocol content, `voice-net.ts` for addresses, tokens and request bodies, `voice-store.ts` for its state files and `voice-sessions.ts` for new conversations and warm-ups): replies, actions, "working" and "done" tied to the app request they belong to; a single checked photo per message; wake-up push through UnifiedPush for a phone that is off; "new conversation" and "warm-up" frames.
 - **Weather** for the voice app's conversation (`weather_forecast`): Italian places from 3B Meteo's page, places abroad (and Italian ones when 3B Meteo does not answer or its page cannot be read) from Open-Meteo, a few lines with the source. One tool call instead of a web search and several reads of a page too large to fit. Other channels are not affected.
 - **Phone tools** for the agent (`phone_set_timer`, `phone_set_alarm`, stopping, skipping and snoozing them, `phone_open_app`, `phone_call`, music, volume, flashlight, navigation, links, message and Signal drafts, notes, battery, reads of the calendar, position and notifications, calendar changes with approval on the phone, a generic approval question `phone_confirm`, photo tools `phone_identify_plant`, `phone_product` and `phone_image_search`, and `voice_working`). They are offered only in the voice app's conversation and in sessions bound to no chat (a scheduled task's); a Telegram or terminal conversation does not see them. A tool whose action the connected app does not declare fails with a clear message (an old app is told to update).
 - **Questions as choices**: NanoClaw's `ask_user_question` reaches the app as a `choose` action, one button per option, answered by button, voice or text. `send_card` is not offered in the voice app's conversation (the app has no cards); other channels keep both.
@@ -44,11 +44,16 @@ payload/container/agent-runner/src/voice-instructions-filter.ts -> container/age
 payload/scripts/tsconfig.voice-setup.json -> scripts/tsconfig.voice-setup.json
 payload/scripts/voice-core-seams.mjs -> scripts/voice-core-seams.mjs
 payload/scripts/voice-setup.ts -> scripts/voice-setup.ts
+payload/src/channels/voice-frames.ts -> src/channels/voice-frames.ts
 payload/src/channels/voice-install.test.ts -> src/channels/voice-install.test.ts
 payload/src/channels/voice-install.ts -> src/channels/voice-install.ts
 payload/src/channels/voice-instructions.md -> src/channels/voice-instructions.md
+payload/src/channels/voice-net.ts -> src/channels/voice-net.ts
 payload/src/channels/voice-registration.test.ts -> src/channels/voice-registration.test.ts
 payload/src/channels/voice-reset.test.ts -> src/channels/voice-reset.test.ts
+payload/src/channels/voice-sessions.ts -> src/channels/voice-sessions.ts
+payload/src/channels/voice-store.test.ts -> src/channels/voice-store.test.ts
+payload/src/channels/voice-store.ts -> src/channels/voice-store.ts
 payload/src/channels/voice.test.ts -> src/channels/voice.test.ts
 payload/src/channels/voice.ts -> src/channels/voice.ts
 ```
