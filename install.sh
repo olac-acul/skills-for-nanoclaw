@@ -355,6 +355,14 @@ step_extras() {
   say "8. Extra skills"
   local dir setup name
   for dir in "${EXTRAS[@]}"; do
+    # _shared: files the skills of that folder have in common (the private brokers' broker_common.py), found by each
+    # skill next to its own folder.
+    if [[ -d "$dir/_shared" ]]; then
+      rm -rf "$HOME_DIR/private-skills/_shared"
+      mkdir -p "$HOME_DIR/private-skills"
+      cp -a "$dir/_shared" "$HOME_DIR/private-skills/_shared"
+      chown -R "$NC_USER:$NC_USER" "$HOME_DIR/private-skills"
+    fi
     for setup in "$dir"/*/setup.sh; do
       [[ -f "$setup" ]] || continue
       name="$(basename "$(dirname "$setup")")"
