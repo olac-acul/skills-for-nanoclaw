@@ -6,7 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { DEFAULT_SKILLS, foldersWithVoiceSection, parseArgs } from './install-skills.mjs';
+import { DEFAULT_SKILLS, foldersWithVoiceSection, OPTIONAL_SKILLS, parseArgs } from './install-skills.mjs';
 import { APPLY_RUNNER } from './skill-runner.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -16,6 +16,10 @@ test('applies the skills in the order the panel needs, whatever order they are n
   assert.deepEqual(parseArgs(['--install', '/x', '--skills', 'add-assistant-prompt,add-voice,add-manager-panel,add-manager-backup']).skills, DEFAULT_SKILLS);
   assert.deepEqual(parseArgs(['--install', '/x', '--skills', 'add-manager-backup']).skills, ['add-manager-backup']);
   assert.equal(parseArgs(['--install', '/x', '--no-restart']).restart, false);
+  // An optional skill only when named, after the default ones.
+  assert.ok(!DEFAULT_SKILLS.includes('add-signal-number') && OPTIONAL_SKILLS.includes('add-signal-number'));
+  assert.deepEqual(parseArgs(['--install', '/x', '--skills', 'add-signal-number,add-voice']).skills, ['add-voice', 'add-signal-number']);
+  assert.throws(() => parseArgs(['--install', '/x', '--skills', 'add-nothing']), /not a skill/);
   assert.equal(parseArgs(['--install', '/x']).commit, true);
   assert.equal(parseArgs(['--install', '/x', '--no-commit']).commit, false);
 });

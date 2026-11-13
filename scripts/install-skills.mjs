@@ -29,6 +29,8 @@ import { commitAll, markerMatches, stampMarker, treeIsClean } from './upgrade-ma
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_SKILLS = ['add-manager-backup', 'add-manager-panel', 'add-voice', 'add-assistant-prompt'];
+/** Installed only when named with --skills: a channel not every install has (it needs a number of its own). */
+export const OPTIONAL_SKILLS = ['add-signal-number'];
 
 function fail(message) {
   console.error(`install-skills: ${message}`);
@@ -46,12 +48,13 @@ export function parseArgs(argv) {
     else throw new Error(`unknown argument ${JSON.stringify(arg)}`);
   }
   if (!flags.install) throw new Error('--install DIR is required');
-  const unknown = flags.skills.filter((s) => !DEFAULT_SKILLS.includes(s));
+  const all = [...DEFAULT_SKILLS, ...OPTIONAL_SKILLS];
+  const unknown = flags.skills.filter((s) => !all.includes(s));
   if (unknown.length) throw new Error(`not a skill of this repository: ${unknown.join(', ')}`);
   if (flags.skills.includes('add-manager-panel') && !flags.skills.includes('add-manager-backup'))
     throw new Error('add-manager-panel needs add-manager-backup');
   // The engine applies them in this order: the panel uses the backup library.
-  flags.skills = DEFAULT_SKILLS.filter((s) => flags.skills.includes(s));
+  flags.skills = all.filter((s) => flags.skills.includes(s));
   return flags;
 }
 

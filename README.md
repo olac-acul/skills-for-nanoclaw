@@ -15,8 +15,9 @@ or provider files, listed in their own documentation, applied as exact anchored 
 | [`add-manager-backup`](.claude/skills/add-manager-backup/SKILL.md) | Encrypted, verified backups and restores from the terminal (and from the panel): a restore with a way back if it fails, a rehearsal mode that never activates channel accounts, and weekly scheduled backups with a retention count. |
 | [`add-voice`](.claude/skills/add-voice/SKILL.md) | A voice channel for the NanoVoice Android app: a token-protected WebSocket that streams the agent's replies to the phone and lets the agent run phone actions (timers, alarms, calendar changes with approval on the phone, music, notes, photos), with a setup script that enables it, wires it to an agent and shows what to enter in the app. |
 | [`add-assistant-prompt`](.claude/skills/add-assistant-prompt/SKILL.md) | A shorter prompt for OpenCode agents that work as personal assistants: a short assistant prompt instead of OpenCode's coding prompt, and its coding-only tools (sub-agents, to-do lists) switched off, about 3,000 tokens less in every request. |
+| [`add-signal-number`](.claude/skills/add-signal-number/SKILL.md) | Signal with a number of its own for the assistant (not the owner's linked phone): it joins groups as a member, pictures and PDFs reach the agent as copies in its session, signal-cli's files are deleted, and only the allowed groups and the owner's direct messages get through. Optional: `install-skills.mjs` installs it only when named with `--skills`. |
 
-Install `add-manager-backup` first; the panel builds on it. `add-voice` and `add-assistant-prompt` stand alone.
+Install `add-manager-backup` first; the panel builds on it. `add-voice`, `add-assistant-prompt` and `add-signal-number` stand alone.
 
 ## Guide
 
