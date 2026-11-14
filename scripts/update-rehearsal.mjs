@@ -46,6 +46,27 @@ function update(command, extra = []) {
   return result.status;
 }
 
+/**
+ * The end of the newest validation log update-install kept (it names its path, but on a CI runner the file is gone
+ * with the machine): enough of upstream's own output to see why the staged copy did not validate.
+ */
+function validationLogTail(lines = 80) {
+  const dir = path.join(os.homedir(), '.nanoclaw-updates');
+  let newest = null;
+  try {
+    newest = fs
+      .readdirSync(dir)
+      .filter((name) => /^validate-\d+\.log$/.test(name))
+      .sort()
+      .pop();
+  } catch {
+    return '';
+  }
+  if (!newest) return '';
+  const text = fs.readFileSync(path.join(dir, newest), 'utf8').trimEnd().split('\n').slice(-lines).join('\n');
+  return `\n--- the end of ${newest} ---\n${text}\n--- end ---`;
+}
+
 /** A bare stand-in for upstream: the tree's own upstream commit plus one commit made by `change`. */
 function fakeUpstream(base, name, change) {
   const bare = path.join(scratch, `${name}.git`);
@@ -78,7 +99,7 @@ if (stamped) fail(`could not write the upgrade marker: ${stamped}`);
 // 1. A clean merge: upstream changed a file no skill touches.
 fakeUpstream(base, 'clean', (dir) => fs.appendFileSync(path.join(dir, 'README.md'), '\nA line from the update rehearsal.\n'));
 let status = update('prepare', ['--remote', 'rehearsal', '--channel', 'edge', '--yes']);
-if (status !== 0) fail(`prepare of a clean merge ended with exit ${status}`);
+if (status !== 0) fail(`prepare of a clean merge ended with exit ${status}${validationLogTail()}`);
 if (git(workdir, 'rev-parse', 'HEAD') === base) fail('prepare made no baseline commit');
 if (!treeIsClean(workdir)) fail('the baseline commit left changes behind');
 if (!markerMatches(workdir)) fail('the upgrade marker does not match the baseline commit');
