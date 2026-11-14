@@ -10,7 +10,12 @@ owner, and signal-cli on the server receives and decrypts every chat of the owne
 adapter (a JSON-RPC client of the signal-cli daemon) with a number registered for the assistant alone: it is a member
 of the groups it serves, under its own name, and sees nothing else.
 
-What changes from upstream's adapter (`src/channels/signal.ts`):
+The adapter is `src/channels/signal-number.ts` (the channel is still `signal`). The file has its own name on purpose:
+NanoClaw's updater refreshes every channel whose import is in the barrel from the skill named after it, so an
+`import './signal.js'` would be refreshed from upstream's `add-signal`, which would put upstream's adapter back over
+this one at every update. Do not install this skill and upstream's `add-signal` together: both register `signal`.
+
+What changes from upstream's adapter:
 
 - **Attachments as copies.** Pictures (JPEG, PNG, WebP) and PDFs, up to 10 MB each and four per message, go to the
   agent with their bytes: the host saves a copy in the session's own inbox. Upstream passed a path into signal-cli's
@@ -38,9 +43,9 @@ What changes from upstream's adapter (`src/channels/signal.ts`):
 ```nc:copy
 payload/scripts/signal-register.sh -> scripts/signal-register.sh
 payload/setup/install-signal-cli.sh -> setup/install-signal-cli.sh
-payload/src/channels/signal-registration.test.ts -> src/channels/signal-registration.test.ts
-payload/src/channels/signal.test.ts -> src/channels/signal.test.ts
-payload/src/channels/signal.ts -> src/channels/signal.ts
+payload/src/channels/signal-number-registration.test.ts -> src/channels/signal-number-registration.test.ts
+payload/src/channels/signal-number.test.ts -> src/channels/signal-number.test.ts
+payload/src/channels/signal-number.ts -> src/channels/signal-number.ts
 ```
 
 signal-cli, the native build pinned by version and SHA-256 (no Java), into `~/.local/bin` when it is not there:
@@ -52,7 +57,7 @@ command -v signal-cli >/dev/null 2>&1 || [ -x "$HOME/.local/bin/signal-cli" ] ||
 Register the channel (one import line in the channel barrel):
 
 ```nc:append to:src/channels/index.ts
-import './signal.js';
+import './signal-number.js';
 ```
 
 Build and run the tests (the adapter's, and the registration test that fails if the import line is missing):
@@ -62,7 +67,7 @@ pnpm run build
 ```
 
 ```nc:run effect:test
-pnpm exec vitest run src/channels/signal
+pnpm exec vitest run src/channels/signal-number
 ```
 
 The channel starts only when `SIGNAL_ACCOUNT` is set: installing the skill changes nothing until the number is

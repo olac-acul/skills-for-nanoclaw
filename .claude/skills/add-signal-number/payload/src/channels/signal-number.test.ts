@@ -71,7 +71,7 @@ import {
   createSignalAdapter,
   MAX_ATTACHMENT_BYTES,
   sweepAttachments,
-} from './signal.js';
+} from './signal-number.js';
 
 // --- Test helpers ---
 

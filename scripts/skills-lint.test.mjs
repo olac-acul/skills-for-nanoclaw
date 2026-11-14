@@ -46,6 +46,18 @@ for (const name of skills) {
     for (const entry of copyEntries(skill)) assert.equal(entry.dst, entry.src.replace(/^payload\//, ''), `${entry.src} should land at the same path without payload/`);
   });
 
+  test(`${name}: a channel it adds is named after it, so NanoClaw's updater refreshes it from this skill`, () => {
+    // Upstream's updater gives an `import './<x>.js'` of the channel barrel to the skill `add-<x>`, whichever skill
+    // appended it: a channel file named after an upstream skill would be refreshed from upstream's version.
+    for (const match of skill.matchAll(/```nc:append to:src\/channels\/index\.ts\n([\s\S]*?)```/g)) {
+      for (const line of match[1].split('\n').map((l) => l.trim()).filter(Boolean)) {
+        const imported = /^import '\.\/([a-z0-9-]+)\.js';$/.exec(line)?.[1];
+        assert.ok(imported, `unexpected line in the channel barrel: ${line}`);
+        assert.equal(`add-${imported}`, name, `src/channels/${imported}.ts must belong to add-${imported}`);
+      }
+    }
+  });
+
   test(`${name}: REMOVE.md exists and names every installed file`, () => {
     const remove = join(dir, 'REMOVE.md');
     assert.ok(existsSync(remove), 'REMOVE.md missing');
