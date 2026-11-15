@@ -62,6 +62,9 @@ test('reads the updater\'s JSON even with noise before it, and says null for not
   assert.equal(parseControllerJson(''), null);
   assert.equal(parseControllerJson('no json here'), null);
   assert.equal(parseControllerJson('{broken'), null);
+  // Output before the JSON may hold braces of its own; the JSON is the last block, possibly over several lines.
+  const noisy = 'WARN {"err":"x"} not json\n{ partial\n{\n  "schema": "nanoclaw-update-error/v1",\n  "error": "Command failed: pnpm test\\n FAIL a.test.ts"\n}';
+  assert.deepEqual(parseControllerJson(noisy), { schema: 'nanoclaw-update-error/v1', error: 'Command failed: pnpm test\n FAIL a.test.ts' });
 });
 
 test('describes where a transaction stands', () => {

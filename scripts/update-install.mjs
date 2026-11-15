@@ -103,21 +103,25 @@ export function planRequirements(requirements) {
   return { automatic, manual };
 }
 
-/** Controller output is JSON on stdout; anything else on stdout means it did not get that far. */
+/**
+ * Controller output is JSON on stdout, at the end: before it there may be other output, which can hold braces of its
+ * own (a logged object). So the JSON is looked for from the last line that starts with `{` backwards; anything else on
+ * stdout means it did not get that far.
+ */
 export function parseControllerJson(stdout) {
   const text = `${stdout ?? ''}`.trim();
   if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    const start = text.indexOf('{');
-    if (start < 0) return null;
+  const starts = [0];
+  for (let at = text.indexOf('\n{'); at >= 0; at = text.indexOf('\n{', at + 1)) starts.push(at + 1);
+  for (const start of starts.reverse()) {
     try {
-      return JSON.parse(text.slice(start));
+      const value = JSON.parse(text.slice(start));
+      if (value && typeof value === 'object') return value;
     } catch {
-      return null;
+      // not from here
     }
   }
+  return null;
 }
 
 /** The one-line state of an update transaction for a person. */

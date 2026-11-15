@@ -50,7 +50,7 @@ function update(command, extra = []) {
  * The end of the newest validation log update-install kept (it names its path, but on a CI runner the file is gone
  * with the machine): enough of upstream's own output to see why the staged copy did not validate.
  */
-function validationLogTail(lines = 80) {
+function validationLogTail(lines = 120) {
   const dir = path.join(os.homedir(), '.nanoclaw-updates');
   let newest = null;
   try {
@@ -63,7 +63,17 @@ function validationLogTail(lines = 80) {
     return '';
   }
   if (!newest) return '';
-  const text = fs.readFileSync(path.join(dir, newest), 'utf8').trimEnd().split('\n').slice(-lines).join('\n');
+  let text = fs.readFileSync(path.join(dir, newest), 'utf8');
+  // Upstream's error is JSON whose `error` holds the whole test output on one line, which the CI log cuts at 64 KB:
+  // its last lines (the failing tests and the summary) are what matters.
+  try {
+    const error = JSON.parse(text.slice(text.indexOf('{')))?.error;
+    if (typeof error === 'string') text = error;
+  } catch {
+    // not JSON: the log as it is
+  }
+  // eslint-disable-next-line no-control-regex -- colours out
+  text = text.replace(/\x1b\[[0-9;]*m/g, '').trimEnd().split('\n').slice(-lines).join('\n');
   return `\n--- the end of ${newest} ---\n${text}\n--- end ---`;
 }
 
