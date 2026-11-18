@@ -20,6 +20,8 @@ function install() {
   return root;
 }
 const read = (root, file) => readFileSync(join(root, file), 'utf8');
+/** How many times an edit is in place: its markers, the one form it has (old or newer upstream). */
+const placed = (text, edit) => [].concat(edit.marker).reduce((n, m) => n + text.split(m).length - 1, 0);
 const snapshot = (root) => SEAMS.map(({ file }) => read(root, file));
 
 test('applies every edit, and every marker is present afterwards', () => {
@@ -27,7 +29,7 @@ test('applies every edit, and every marker is present afterwards', () => {
   try {
     const written = apply(root);
     assert.equal(written.length, SEAMS.length);
-    for (const { file, edits } of SEAMS) for (const edit of edits) assert.ok(read(root, file).includes(edit.marker), `${file}: ${edit.name}`);
+    for (const { file, edits } of SEAMS) for (const edit of edits) assert.equal(placed(read(root, file), edit), 1, `${file}: ${edit.name}`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -52,7 +54,7 @@ test('finishes a partly applied install without doubling an edit', () => {
     const full = join(root, first.file);
     writeFileSync(full, readFileSync(full, 'utf8').replace(first.edits[0].anchor, first.edits[0].replace));
     apply(root);
-    for (const { file, edits } of SEAMS) for (const edit of edits) assert.equal(read(root, file).split(edit.marker).length - 1, 1, `${file}: ${edit.name}`);
+    for (const { file, edits } of SEAMS) for (const edit of edits) assert.equal(placed(read(root, file), edit), 1, `${file}: ${edit.name}`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -146,9 +148,14 @@ test('fits a newer upstream too: each edit takes the newer form of its anchor wh
     for (const { file, edits } of SEAMS) {
       for (const edit of edits) {
         const text = read(root, file);
-        assert.equal(text.split(edit.marker).length - 1, 1, `${file}: ${edit.name}`);
+        assert.equal(placed(text, edit), 1, `${file}: ${edit.name}`);
         if (edit.newer) assert.ok(text.includes(edit.newer[0].replace), `${file}: ${edit.name} took the newer form`);
       }
+    }
+    // No line of the host's files is over prettier's 120 characters: the format the host's commits go through must not
+    // wrap an edit out of recognition (the container's code is not formatted that way).
+    for (const { file } of SEAMS.filter((s) => s.file.startsWith('src/'))) {
+      for (const line of read(root, file).split('\n')) assert.ok(line.length <= 120, `${file}: ${line}`);
     }
     // inReplyTo after deliveryId, never between the instance and deliveryId.
     const delivery = read(root, 'src/delivery.ts');

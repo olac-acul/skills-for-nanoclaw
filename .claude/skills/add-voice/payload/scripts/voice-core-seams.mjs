@@ -25,7 +25,8 @@
  *
  *   - an edit is applied only when its anchor text occurs exactly once; an edit may also know the form its anchor
  *     has in newer upstream versions (`newer`, tried first), so one script fits installs on either side of a change;
- *   - an edit already in place (its marker is present) is left alone, so running it again changes nothing;
+ *   - an edit already in place (its marker, or one of its markers, is present) is left alone, so running it again
+ *     changes nothing;
  *   - if ANY edit of ANY file cannot be placed (the anchor moved, is gone, or occurs twice, because upstream
  *     changed that code), nothing is written at all and the script exits with a message naming the file and
  *     the edit, so the tree is never left half-patched.
@@ -135,13 +136,16 @@ export const SEAMS = [
         newer: [
           {
             anchor: 'return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files, deliveryId });',
+            // On one line the call would be 121 characters, and prettier (120) would wrap it on the next format, where
+            // neither the anchor nor the marker is found any more: two short lines prettier leaves alone.
             replace:
-              'return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files, deliveryId, inReplyTo });',
+              'const message = { kind, content: JSON.parse(content), files, deliveryId, inReplyTo };\n' +
+              '      return adapter.deliver(platformId, threadId, message);',
           },
         ],
         anchor: 'return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files });',
         replace: 'return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files, inReplyTo });',
-        marker: ', inReplyTo });',
+        marker: [', inReplyTo });', 'files, deliveryId, inReplyTo };'],
       },
     ],
   },
@@ -263,7 +267,7 @@ export function plan(root, seams = SEAMS) {
     let content = fs.readFileSync(full, 'utf8');
     let changed = false;
     for (const edit of edits) {
-      if (content.includes(edit.marker)) continue; // already in place
+      if ([].concat(edit.marker).some((m) => content.includes(m))) continue; // already in place
       // The newer upstream forms first, then the original one: the first anchor that occurs exactly once.
       const forms = [...(edit.newer ?? []), { anchor: edit.anchor, replace: edit.replace }];
       const form = forms.find((f) => count(content, f.anchor) === 1);
