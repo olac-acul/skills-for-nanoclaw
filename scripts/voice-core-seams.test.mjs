@@ -132,3 +132,30 @@ test('an optional file that is absent is skipped, not a problem', () => {
   }
 });
 
+
+test('fits a newer upstream too: each edit takes the newer form of its anchor when that is the one present', () => {
+  const root = mkdtempSync(join(tmpdir(), 'seams-newer-'));
+  try {
+    for (const { file, edits } of SEAMS) {
+      const full = join(root, file);
+      mkdirSync(dirname(full), { recursive: true });
+      const anchors = edits.map((e) => (e.newer ? e.newer[0].anchor : e.anchor));
+      writeFileSync(full, ['// unrelated start', ...anchors, '// unrelated end', ''].join('\n'));
+    }
+    apply(root);
+    for (const { file, edits } of SEAMS) {
+      for (const edit of edits) {
+        const text = read(root, file);
+        assert.equal(text.split(edit.marker).length - 1, 1, `${file}: ${edit.name}`);
+        if (edit.newer) assert.ok(text.includes(edit.newer[0].replace), `${file}: ${edit.name} took the newer form`);
+      }
+    }
+    // inReplyTo after deliveryId, never between the instance and deliveryId.
+    const delivery = read(root, 'src/delivery.ts');
+    assert.ok(delivery.includes('    deliverInstance,\n    deliveryId,\n    msg.inReplyTo,\n'));
+    assert.ok(!delivery.includes('    deliverInstance,\n    msg.inReplyTo,\n'));
+    assert.deepEqual(apply(root), []); // and again: nothing
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

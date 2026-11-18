@@ -23,7 +23,8 @@
  *
  * This script applies them as exact, anchored edits. It is built to fail loudly rather than guess:
  *
- *   - an edit is applied only when its anchor text occurs exactly once;
+ *   - an edit is applied only when its anchor text occurs exactly once; an edit may also know the form its anchor
+ *     has in newer upstream versions (`newer`, tried first), so one script fits installs on either side of a change;
  *   - an edit already in place (its marker is present) is left alone, so running it again changes nothing;
  *   - if ANY edit of ANY file cannot be placed (the anchor moved, is gone, or occurs twice, because upstream
  *     changed that code), nothing is written at all and the script exits with a message naming the file and
@@ -117,15 +118,30 @@ export const SEAMS = [
     edits: [
       {
         name: 'delivery adapter takes inReplyTo',
+        // Since upstream's split-reply resume (Nov 2026) a deliveryId comes after the instance: inReplyTo goes last.
+        newer: [
+          {
+            anchor: '      instance?: string,\n      deliveryId?: string,\n    ): Promise<string | undefined> {\n',
+            replace:
+              '      instance?: string,\n      deliveryId?: string,\n      inReplyTo?: string | null,\n    ): Promise<string | undefined> {\n',
+          },
+        ],
         anchor: '      instance?: string,\n    ): Promise<string | undefined> {\n',
         replace: '      instance?: string,\n      inReplyTo?: string | null,\n    ): Promise<string | undefined> {\n',
         marker: '      inReplyTo?: string | null,\n    ): Promise<string | undefined> {',
       },
       {
         name: 'inReplyTo handed to the adapter',
+        newer: [
+          {
+            anchor: 'return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files, deliveryId });',
+            replace:
+              'return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files, deliveryId, inReplyTo });',
+          },
+        ],
         anchor: 'return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files });',
         replace: 'return adapter.deliver(platformId, threadId, { kind, content: JSON.parse(content), files, inReplyTo });',
-        marker: 'content: JSON.parse(content), files, inReplyTo }',
+        marker: ', inReplyTo });',
       },
     ],
   },
@@ -203,6 +219,14 @@ export const SEAMS = [
     edits: [
       {
         name: 'ChannelDeliveryAdapter.deliver takes inReplyTo',
+        newer: [
+          {
+            anchor: '    deliveryId?: string,\n  ): Promise<string | undefined>;\n',
+            replace:
+              '    deliveryId?: string,\n    /** The inbound message the agent was answering (messages_out.in_reply_to). */\n' +
+              '    inReplyTo?: string | null,\n  ): Promise<string | undefined>;\n',
+          },
+        ],
         anchor: '    instance?: string,\n  ): Promise<string | undefined>;\n',
         replace:
           '    instance?: string,\n    /** The inbound message the agent was answering (messages_out.in_reply_to). */\n' +
@@ -211,6 +235,8 @@ export const SEAMS = [
       },
       {
         name: 'inReplyTo passed on delivery',
+        // In newer upstream the old anchor still occurs once, but inReplyTo must follow deliveryId: tried first.
+        newer: [{ anchor: '    deliverInstance,\n    deliveryId,\n', replace: '    deliverInstance,\n    deliveryId,\n    msg.inReplyTo,\n' }],
         anchor: '    deliverInstance,\n',
         replace: '    deliverInstance,\n    msg.inReplyTo,\n',
         marker: '    msg.inReplyTo,\n',
@@ -238,15 +264,18 @@ export function plan(root, seams = SEAMS) {
     let changed = false;
     for (const edit of edits) {
       if (content.includes(edit.marker)) continue; // already in place
-      const found = count(content, edit.anchor);
-      if (found !== 1) {
+      // The newer upstream forms first, then the original one: the first anchor that occurs exactly once.
+      const forms = [...(edit.newer ?? []), { anchor: edit.anchor, replace: edit.replace }];
+      const form = forms.find((f) => count(content, f.anchor) === 1);
+      if (!form) {
+        const found = count(content, edit.anchor);
         problems.push(
           `${file}: cannot place "${edit.name}": its anchor text occurs ${found} time(s), expected exactly 1. ` +
             'Upstream changed this code; the edit must be reviewed by hand.',
         );
         continue;
       }
-      content = content.replace(edit.anchor, () => edit.replace);
+      content = content.replace(form.anchor, () => form.replace);
       changed = true;
     }
     files.push({ file, content, changed });
